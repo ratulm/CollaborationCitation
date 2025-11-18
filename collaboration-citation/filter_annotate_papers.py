@@ -8,7 +8,8 @@ For each paper in DBLP, extracts:
 - year
 - conference (mapped from venue)
 - author_conferences (primary research areas of faculty authors)
-- authors (canonical names of all faculty authors)
+- known_authors (canonical names of all faculty authors)
+- num_authors (total number of authors, including non-faculty)
 """
 
 import argparse
@@ -197,63 +198,63 @@ def extract_paper_info(dblp_file: str, from_year: int, to_year: int,
     papers = []
     skipped_venue_count = 0
     skipped_author_count = 0
-    
+
     print(f"Extracting papers from {dblp_file} (years {from_year}-{to_year})...")
-    
+
     try:
         with gzip.open(dblp_file, "rt", encoding="utf-8") as f:
             content = f.read()
             root = ET.fromstring(content)
-        
+
         processed = 0
         for child in root:
             if child.tag not in ["inproceedings", "article"]:
                 continue
-            
+
             # Extract year
             year_elem = child.find("year")
             if year_elem is None or year_elem.text is None:
                 continue
-            
+
             try:
                 year = int(year_elem.text)
             except (ValueError, TypeError):
                 continue
-            
+
             # Filter by year range
             if year < from_year or year > to_year:
                 continue
-            
+
             # Extract dblp_key
             dblp_key = child.get("key", "")
             if not dblp_key:
                 continue
-            
+
             # Extract title
             title_elem = child.find("title")
             if title_elem is None or title_elem.text is None:
                 continue
             title = title_elem.text.strip()
-            
+
             # Extract authors
             authors = []
             for author_elem in child.findall("author"):
                 if author_elem.text is not None:
                     authors.append(author_elem.text.strip())
-            
+
             # Extract venue (booktitle for conferences, journal for articles)
             venue_elem = child.find("booktitle")
             if venue_elem is None:
                 venue_elem = child.find("journal")
             venue = venue_elem.text.strip() if venue_elem is not None and venue_elem.text else ""
-            
+
             # Map venue to conference area using confdict
             conference = ""
             if venue:
                 conf = Conference(venue)
                 if conf in confdict:
                     conference = str(confdict[conf])
-            
+
             # Fallback: Extract venue from DBLP key if not found
             # DBLP keys for conferences have format: conf/{venue}/{paperid}
             if not conference and dblp_key.startswith("conf/"):
@@ -263,61 +264,69 @@ def extract_paper_info(dblp_file: str, from_year: int, to_year: int,
                     conf = Conference(venue_from_key)
                     if conf in confdict:
                         conference = str(confdict[conf])
-            
+
             # Find primary areas of faculty authors and collect faculty names
             faculty_author_areas = set()
             faculty_authors = []
-            
+
             for author in authors:
                 # Try to resolve author name
                 canonical_name = aliasdict.get(author, author)
-                
+
                 # Check if this is a faculty member
                 if canonical_name in faculty or author in faculty:
                     # Add canonical name to faculty authors list
                     faculty_authors.append(canonical_name)
-                    
+
                     # Get their primary area
                     primary_area = author_primary_area.get(canonical_name) or author_primary_area.get(author)
                     if primary_area:
                         faculty_author_areas.add(primary_area)
-            
+
             # Create a sorted list of areas for readability
             areas_list = sorted(list(faculty_author_areas))
             author_conferences = ";".join(areas_list) if areas_list else ""
-            
+
             # Create a sorted list of faculty authors
-            authors_list = ";".join(sorted(faculty_authors)) if faculty_authors else ""
-            
+            known_authors_list = (
+                ";".join(sorted(faculty_authors)) if faculty_authors else ""
+            )
+
+            # Count total number of authors (including non-faculty)
+            num_authors = len(authors)
+
             # Apply filters
             if skip_unknown_venues and not conference:
                 skipped_venue_count += 1
                 continue  # Skip papers with unknown venues
-            
+
             if skip_unknown_authors and not author_conferences:
                 skipped_author_count += 1
                 continue  # Skip papers with zero known authors
-            
-            papers.append({
-                "dblp_key": dblp_key,
-                "title": title,
-                "year": year,
-                "conference": conference,
-                "author_conferences": author_conferences,
-                "authors": authors_list
-            })
-            
+
+            papers.append(
+                {
+                    "dblp_key": dblp_key,
+                    "title": title,
+                    "year": year,
+                    "conference": conference,
+                    "author_conferences": author_conferences,
+                    "known_authors": known_authors_list,
+                    "num_authors": num_authors,
+                }
+            )
+
             processed += 1
             if processed % 10000 == 0:
                 print(f"  Processed {processed} papers...")
-        
+
         print(f"Extracted {len(papers)} papers")
     except Exception as e:
         print(f"Error loading DBLP file: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
-    
+
     return papers, skipped_venue_count, skipped_author_count
 
 
@@ -327,14 +336,14 @@ def write_output(papers: List[Dict], output_file: str, skipped_venue_count: int,
     if not papers:
         print("No papers to write")
         return
-    
+
     print(f"Deduplicating papers by dblp_key...")
-    
+
     # Deduplicate papers by dblp_key, keeping the first occurrence
     seen_keys = set()
     unique_papers = []
     duplicate_count = 0
-    
+
     for paper in papers:
         key = paper["dblp_key"]
         if key in seen_keys:
@@ -343,22 +352,30 @@ def write_output(papers: List[Dict], output_file: str, skipped_venue_count: int,
         else:
             seen_keys.add(key)
             unique_papers.append(paper)
-    
+
     if duplicate_count > 0:
         print(f"  Found {duplicate_count} duplicate papers (removed)")
-    
+
     print(f"Writing {len(unique_papers)} unique papers to {output_file}...")
-    
-    fieldnames = ["dblp_key", "title", "year", "conference", "author_conferences", "authors"]
-    
+
+    fieldnames = [
+        "dblp_key",
+        "title",
+        "year",
+        "conference",
+        "author_conferences",
+        "known_authors",
+        "num_authors",
+    ]
+
     try:
         with open(output_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(unique_papers)
-        
+
         print(f"Successfully wrote {len(unique_papers)} papers to {output_file}")
-        
+
         # Print filter statistics
         if skipped_venue_count > 0 or skipped_author_count > 0:
             print(f"\nFilter Statistics:")

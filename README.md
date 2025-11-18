@@ -1,3 +1,11 @@
+This repository hosts the data and scripts for underlying the [collaboration-citation analysis](TODO). It is a fork of the [CSRankings repository](https://github.com/emeryberger/CSrankings). 
+
+The newly added content is in the [collaboration-citation folder](https://github.com/ratulm/CollaborationCitation/tree/gh-pages/collaboration-citation). If you want to reproduce my analysis, start with the Makefile. 
+
+Get in touch (ratul@ratul.org) if you need assistance. 
+
+The original CSRankings README follows. 
+
 Computer Science Rankings
 =========================
 

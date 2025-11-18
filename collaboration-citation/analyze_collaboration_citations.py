@@ -248,6 +248,25 @@ def parse_arguments():
         default=10.0,
         help="Percentage threshold for heavy hitters (top X%% of papers by citation count) (default: 10.0)",
     )
+    parser.add_argument(
+        "--from-year",
+        type=int,
+        default=None,
+        help="Filter papers to only those published from this year onwards (inclusive) (default: None, no lower bound)",
+    )
+    parser.add_argument(
+        "--to-year",
+        type=int,
+        default=None,
+        help="Filter papers to only those published up to this year (inclusive) (default: None, no upper bound)",
+    )
+    parser.add_argument(
+        "--author-normalization",
+        type=str,
+        choices=["known", "all"],
+        default="known",
+        help="Normalize citations by author count: 'known' (faculty authors only) or 'all' (all authors) (default: known)",
+    )
     return parser.parse_args()
 
 
@@ -263,7 +282,7 @@ def map_to_level(conferences: List[str], level: str) -> Set[str]:
     """
     if level == "conference":
         return set(conferences)
-    
+
     mapped = set()
     for conf in conferences:
         if level == "area":
@@ -275,13 +294,26 @@ def map_to_level(conferences: List[str], level: str) -> Set[str]:
             parent = PARENT_MAP.get(conf, conf)
             meta = META_AREA_MAP.get(parent, parent)
             mapped.add(meta)
-    
+
     return mapped
 
 
-def load_data(citations_file: str, papers_file: str, min_citations: int = 0, collaboration_level: str = "conference", metaarea_filters: List[str] = None, area_filters: List[str] = None, conference_filters: List[str] = None, author_filters: List[str] = None, max_collab_score: int = 3) -> Tuple[List[Dict], int]:
+def load_data(
+    citations_file: str,
+    papers_file: str,
+    min_citations: int = 0,
+    collaboration_level: str = "conference",
+    metaarea_filters: List[str] = None,
+    area_filters: List[str] = None,
+    conference_filters: List[str] = None,
+    author_filters: List[str] = None,
+    max_collab_score: int = 3,
+    from_year: int = None,
+    to_year: int = None,
+    author_normalization: str = "known",
+) -> Tuple[List[Dict], int]:
     """Load papers with collaboration scores and citation counts.
-    
+
     Args:
         citations_file: Path to citations CSV file
         papers_file: Path to papers CSV file
@@ -292,12 +324,15 @@ def load_data(citations_file: str, papers_file: str, min_citations: int = 0, col
         conference_filters: If specified, only include papers published in these conferences
         author_filters: If specified, only include papers authored by these faculty members
         max_collab_score: Maximum collaboration score to display separately; scores >= this are binned together
-    
+        from_year: If specified, only include papers from this year onwards (inclusive)
+        to_year: If specified, only include papers up to this year (inclusive)
+        author_normalization: Normalize citations by 'known' or 'all' authors
+
     Returns:
         Tuple of (filtered papers, total papers loaded)
     """
     all_papers = []
-    
+
     print(f"Loading citation data from {citations_file}...")
     print(f"Loading paper data from {papers_file}...")
     if conference_filters:
@@ -306,62 +341,88 @@ def load_data(citations_file: str, papers_file: str, min_citations: int = 0, col
         print(f"Filtering to papers published in area(s): {', '.join(area_filters)}")
     elif metaarea_filters:
         print(f"Filtering to papers published in metaarea(s): {', '.join(metaarea_filters)}")
-    
+
     if author_filters:
         print(f"Filtering to papers authored by: {', '.join(author_filters)}")
-    
+
+    if from_year is not None or to_year is not None:
+        year_range = []
+        if from_year is not None:
+            year_range.append(f"from {from_year}")
+        if to_year is not None:
+            year_range.append(f"to {to_year}")
+        print(f"Filtering to papers published {' '.join(year_range)}")
+
     try:
         # Load paper information indexed by dblp_key
         paper_info = {}
         with open(papers_file, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
+                # Get author counts
+                known_authors = row.get("known_authors", "")
+                known_author_count = (
+                    len(known_authors.split(";")) if known_authors else 0
+                )
+
+                # Use num_authors if available, otherwise fall back to known_author_count
+                if "num_authors" in row and row["num_authors"]:
+                    total_author_count = int(row["num_authors"])
+                else:
+                    total_author_count = known_author_count
+
                 paper_info[row["dblp_key"]] = {
                     "conference": row.get("conference", ""),
                     "author_conferences": row.get("author_conferences", ""),
-                    "authors": row.get("authors", "")
+                    "known_authors": known_authors,
+                    "known_author_count": known_author_count,
+                    "total_author_count": total_author_count,
                 }
-        
+
         print(f"Loaded paper information for {len(paper_info)} papers")
-        
+
         # Load citation data and join with conference information
         with open(citations_file, "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
                 dblp_key = row["dblp_key"]
-                
+
                 # Skip papers without paper information
                 if dblp_key not in paper_info:
                     continue
-                
+
                 # Only include papers with citation data
                 if row["citationCount"] and row["citationCount"] != "":
                     try:
                         citation_count = int(row["citationCount"])
-                        
+
                         # Get paper information
                         paper_data = paper_info[dblp_key]
                         paper_conference = paper_data["conference"]
-                        
+
                         # Apply author filter first (if specified)
                         if author_filters:
-                            paper_authors = paper_data["authors"].split(";") if paper_data["authors"] else []
+                            paper_authors = (
+                                paper_data["known_authors"].split(";")
+                                if paper_data["known_authors"]
+                                else []
+                            )
                             # Check if any of the specified authors are in the paper's author list
                             if not any(author in paper_authors for author in author_filters):
                                 continue  # Skip papers not authored by the specified authors
-                        
+
                         # Apply venue filters based on paper_conference
                         # Conference filter (most specific)
                         if conference_filters:
                             if paper_conference not in conference_filters:
                                 continue  # Skip papers not in the specified conferences
-                        
+
                         # Area filter (parent area)
                         elif area_filters:
                             paper_area = PARENT_MAP.get(paper_conference, paper_conference)
                             if paper_area not in area_filters:
                                 continue  # Skip papers not in the specified areas
-                        
+
                         # Metaarea filter (top-level category)
                         elif metaarea_filters:
                             if paper_conference:
@@ -372,46 +433,84 @@ def load_data(citations_file: str, papers_file: str, min_citations: int = 0, col
                                     continue  # Skip papers not in the specified metaareas
                             else:
                                 continue  # Skip papers without venue information
-                        
+
                         # Parse conference-level areas from author conferences
                         author_conferences = paper_data["author_conferences"]
                         conference_areas = author_conferences.split(";") if author_conferences else []
-                        
+
                         # Map to the requested level and recompute score
                         mapped_areas = map_to_level(conference_areas, collaboration_level)
                         collaboration_score = len(mapped_areas)
-                        
+
                         # Bin scores: 0 -> 1, 1 -> 1, 2 -> 2, ..., max_collab_score+ -> max_collab_score
                         if collaboration_score == 0:
                             binned_score = 1
                         else:
                             binned_score = min(collaboration_score, max_collab_score)
-                        
+
                         areas_string = ";".join(sorted(mapped_areas))
-                        
-                        all_papers.append({
-                            "dblp_key": dblp_key,
-                            "title": row["title"],
-                            "year": int(row["year"]),
-                            "citationCount": citation_count,
-                            "influentialCitationCount": int(row["influentialCitationCount"]) if row["influentialCitationCount"] else 0,
-                            "collaboration_score": binned_score,
-                            "collaboration_areas": areas_string,
-                        })
+
+                        # Get paper year
+                        paper_year = int(row["year"])
+
+                        # Apply year filters
+                        if from_year is not None and paper_year < from_year:
+                            continue  # Skip papers before from_year
+                        if to_year is not None and paper_year > to_year:
+                            continue  # Skip papers after to_year
+
+                        # Get author counts for normalization
+                        known_author_count = paper_data["known_author_count"]
+                        total_author_count = paper_data["total_author_count"]
+
+                        # Determine normalization divisor
+                        if author_normalization == "known":
+                            author_divisor = max(
+                                known_author_count, 1
+                            )  # Avoid division by zero
+                        else:  # "all"
+                            author_divisor = max(
+                                total_author_count, 1
+                            )  # Avoid division by zero
+
+                        # Compute normalized citations
+                        normalized_citations = citation_count / author_divisor
+                        influential_count = (
+                            int(row["influentialCitationCount"])
+                            if row["influentialCitationCount"]
+                            else 0
+                        )
+                        normalized_influential = influential_count / author_divisor
+
+                        all_papers.append(
+                            {
+                                "dblp_key": dblp_key,
+                                "title": row["title"],
+                                "year": paper_year,
+                                "citationCount": citation_count,
+                                "influentialCitationCount": influential_count,
+                                "normalizedCitations": normalized_citations,
+                                "normalizedInfluential": normalized_influential,
+                                "known_author_count": known_author_count,
+                                "total_author_count": total_author_count,
+                                "collaboration_score": binned_score,
+                                "collaboration_areas": areas_string,
+                            }
+                        )
                     except (ValueError, KeyError) as e:
                         continue
-        
+
         total_loaded = len(all_papers)
         print(f"Loaded {total_loaded} papers with citation data")
-        
+
         # Filter by minimum citations
         if min_citations > 0:
             filtered_papers = [p for p in all_papers if p["citationCount"] >= min_citations]
             print(f"Filtered to {len(filtered_papers)} papers with >= {min_citations} citations")
             return filtered_papers, total_loaded
-        
+
         return all_papers, total_loaded
-        
+
     except Exception as e:
         print(f"Error loading data: {e}")
         import traceback
@@ -475,7 +574,7 @@ def analyze_by_score(papers: List[Dict], heavy_hitter_pct: float = 10.0) -> Dict
         Dictionary mapping collaboration scores to statistics
     """
     by_score = {}
-    
+
     for paper in papers:
         score = paper["collaboration_score"]
         if score not in by_score:
@@ -483,28 +582,49 @@ def analyze_by_score(papers: List[Dict], heavy_hitter_pct: float = 10.0) -> Dict
                 "papers": [],
                 "citations": [],
                 "influential_citations": [],
+                "normalized_citations": [],
+                "normalized_influential": [],
             }
-        
+
         by_score[score]["papers"].append(paper)
         by_score[score]["citations"].append(paper["citationCount"])
         by_score[score]["influential_citations"].append(paper["influentialCitationCount"])
-    
+        by_score[score]["normalized_citations"].append(paper["normalizedCitations"])
+        by_score[score]["normalized_influential"].append(paper["normalizedInfluential"])
+
     # Determine heavy hitter threshold (top X% by citation count)
     all_citations = [p["citationCount"] for p in papers]
     all_citations_sorted = sorted(all_citations, reverse=True)
     heavy_hitter_count = max(1, int(len(all_citations) * heavy_hitter_pct / 100))
     heavy_hitter_threshold = all_citations_sorted[heavy_hitter_count - 1]
-    
+
+    # Determine heavy hitter threshold for normalized citations
+    all_normalized_citations = [p["normalizedCitations"] for p in papers]
+    all_normalized_sorted = sorted(all_normalized_citations, reverse=True)
+    normalized_heavy_hitter_threshold = all_normalized_sorted[heavy_hitter_count - 1]
+
     # Compute statistics for each score
     stats_by_score = {}
     for score, data in by_score.items():
         citations = data["citations"]
         influential = data["influential_citations"]
-        
-        # Count heavy hitters in this score group
+        normalized_cites = data["normalized_citations"]
+        normalized_infl = data["normalized_influential"]
+
+        # Count heavy hitters in this score group (raw citations)
         heavy_hitters_in_group = sum(1 for c in citations if c >= heavy_hitter_threshold)
         heavy_hitter_probability = (heavy_hitters_in_group / len(citations)) * 100 if len(citations) > 0 else 0
-        
+
+        # Count heavy hitters in this score group (normalized citations)
+        normalized_heavy_hitters_in_group = sum(
+            1 for c in normalized_cites if c >= normalized_heavy_hitter_threshold
+        )
+        normalized_heavy_hitter_probability = (
+            (normalized_heavy_hitters_in_group / len(normalized_cites)) * 100
+            if len(normalized_cites) > 0
+            else 0
+        )
+
         stats_by_score[score] = {
             "count": len(citations),
             "mean_citations": statistics.mean(citations),
@@ -512,47 +632,62 @@ def analyze_by_score(papers: List[Dict], heavy_hitter_pct: float = 10.0) -> Dict
             "stdev_citations": statistics.stdev(citations) if len(citations) > 1 else 0,
             "mean_influential": statistics.mean(influential),
             "median_influential": statistics.median(influential),
+            "mean_normalized_citations": statistics.mean(normalized_cites),
+            "median_normalized_citations": statistics.median(normalized_cites),
+            "mean_normalized_influential": statistics.mean(normalized_infl),
+            "median_normalized_influential": statistics.median(normalized_infl),
             "total_citations": sum(citations),
             "heavy_hitters": heavy_hitters_in_group,
             "heavy_hitter_probability": heavy_hitter_probability,
+            "normalized_heavy_hitters": normalized_heavy_hitters_in_group,
+            "normalized_heavy_hitter_probability": normalized_heavy_hitter_probability,
         }
-    
+
     return stats_by_score
 
 
 def analyze_by_year(papers: List[Dict]) -> Dict[int, Dict]:
     """Analyze correlation separately by year."""
     by_year = {}
-    
+
     for paper in papers:
         year = paper["year"]
         if year not in by_year:
             by_year[year] = []
         by_year[year].append(paper)
-    
+
     year_stats = {}
     for year, year_papers in by_year.items():
         if len(year_papers) < 10:  # Skip years with too few papers
             continue
-        
+
         scores = [p["collaboration_score"] for p in year_papers]
         citations = [p["citationCount"] for p in year_papers]
-        
+
         correlation = compute_correlation(scores, citations)
-        
+
         year_stats[year] = {
             "count": len(year_papers),
             "correlation": correlation,
             "mean_score": statistics.mean(scores),
             "mean_citations": statistics.mean(citations),
         }
-    
+
     return year_stats
 
 
-def print_analysis(papers: List[Dict], stats_by_score: Dict, year_stats: Dict, min_citations: int = 0, total_papers: int = None, max_collab_score: int = 3, heavy_hitter_pct: float = 10.0):
+def print_analysis(
+    papers: List[Dict],
+    stats_by_score: Dict,
+    year_stats: Dict,
+    min_citations: int = 0,
+    total_papers: int = None,
+    max_collab_score: int = 3,
+    heavy_hitter_pct: float = 10.0,
+    author_normalization: str = "known",
+):
     """Print comprehensive analysis results.
-    
+
     Args:
         papers: List of paper dictionaries
         stats_by_score: Statistics grouped by collaboration score
@@ -561,12 +696,13 @@ def print_analysis(papers: List[Dict], stats_by_score: Dict, year_stats: Dict, m
         total_papers: Total number of papers loaded
         max_collab_score: Maximum collaboration score for binning
         heavy_hitter_pct: Percentage threshold for heavy hitters
+        author_normalization: Type of author normalization used ('known' or 'all')
     """
-    
+
     print("\n" + "="*80)
     print("COLLABORATION SCORE vs CITATION COUNT ANALYSIS")
     print("="*80)
-    
+
     # Overall statistics
     if min_citations > 0:
         print(f"\nMinimum citation threshold: {min_citations}")
@@ -575,21 +711,28 @@ def print_analysis(papers: List[Dict], stats_by_score: Dict, year_stats: Dict, m
             print(f"Papers meeting threshold: {len(papers)} ({100*len(papers)/total_papers:.1f}%)")
     else:
         print(f"\nTotal papers analyzed: {len(papers)}")
-    
+
     print(f"Years covered: {min(p['year'] for p in papers)} - {max(p['year'] for p in papers)}")
-    
+
     # Overall correlation
     all_scores = [p["collaboration_score"] for p in papers]
     all_citations = [p["citationCount"] for p in papers]
     all_influential = [p["influentialCitationCount"] for p in papers]
-    
+    all_normalized_citations = [p["normalizedCitations"] for p in papers]
+    all_normalized_influential = [p["normalizedInfluential"] for p in papers]
+
     overall_correlation = compute_correlation(all_scores, all_citations)
     influential_correlation = compute_correlation(all_scores, all_influential)
-    
+    normalized_correlation = compute_correlation(all_scores, all_normalized_citations)
+    normalized_influential_correlation = compute_correlation(
+        all_scores, all_normalized_influential
+    )
+
     print(f"\n{'OVERALL CORRELATION':-^80}")
+    print(f"Author normalization: {author_normalization} authors")
     print(f"\nCitation Count:")
     print(f"  Spearman rank correlation coefficient: {overall_correlation:.4f}")
-    
+
     if abs(overall_correlation) < 0.1:
         interpretation = "negligible"
     elif abs(overall_correlation) < 0.3:
@@ -600,13 +743,13 @@ def print_analysis(papers: List[Dict], stats_by_score: Dict, year_stats: Dict, m
         interpretation = "strong"
     else:
         interpretation = "very strong"
-    
+
     direction = "positive" if overall_correlation > 0 else "negative"
     print(f"  Interpretation: {interpretation} {direction} correlation")
-    
+
     print(f"\nInfluential Citation Count:")
     print(f"  Spearman rank correlation coefficient: {influential_correlation:.4f}")
-    
+
     if abs(influential_correlation) < 0.1:
         interpretation_inf = "negligible"
     elif abs(influential_correlation) < 0.3:
@@ -617,16 +760,58 @@ def print_analysis(papers: List[Dict], stats_by_score: Dict, year_stats: Dict, m
         interpretation_inf = "strong"
     else:
         interpretation_inf = "very strong"
-    
+
     direction_inf = "positive" if influential_correlation > 0 else "negative"
     print(f"  Interpretation: {interpretation_inf} {direction_inf} correlation")
-    
+
+    print(f"\nNormalized Citation Count (by {author_normalization} authors):")
+    print(f"  Spearman rank correlation coefficient: {normalized_correlation:.4f}")
+
+    if abs(normalized_correlation) < 0.1:
+        interpretation_norm = "negligible"
+    elif abs(normalized_correlation) < 0.3:
+        interpretation_norm = "weak"
+    elif abs(normalized_correlation) < 0.5:
+        interpretation_norm = "moderate"
+    elif abs(normalized_correlation) < 0.7:
+        interpretation_norm = "strong"
+    else:
+        interpretation_norm = "very strong"
+
+    direction_norm = "positive" if normalized_correlation > 0 else "negative"
+    print(f"  Interpretation: {interpretation_norm} {direction_norm} correlation")
+
+    print(
+        f"\nNormalized Influential Citation Count (by {author_normalization} authors):"
+    )
+    print(
+        f"  Spearman rank correlation coefficient: {normalized_influential_correlation:.4f}"
+    )
+
+    if abs(normalized_influential_correlation) < 0.1:
+        interpretation_norm_inf = "negligible"
+    elif abs(normalized_influential_correlation) < 0.3:
+        interpretation_norm_inf = "weak"
+    elif abs(normalized_influential_correlation) < 0.5:
+        interpretation_norm_inf = "moderate"
+    elif abs(normalized_influential_correlation) < 0.7:
+        interpretation_norm_inf = "strong"
+    else:
+        interpretation_norm_inf = "very strong"
+
+    direction_norm_inf = (
+        "positive" if normalized_influential_correlation > 0 else "negative"
+    )
+    print(
+        f"  Interpretation: {interpretation_norm_inf} {direction_norm_inf} correlation"
+    )
+
     # Calculate heavy hitter threshold for display
     all_citations = [p["citationCount"] for p in papers]
     all_citations_sorted = sorted(all_citations, reverse=True)
     heavy_hitter_count = max(1, int(len(all_citations) * heavy_hitter_pct / 100))
     heavy_hitter_threshold = all_citations_sorted[heavy_hitter_count - 1]
-    
+
     # Combined statistics table
     print(f"\n{'STATISTICS BY COLLABORATION SCORE':-^80}")
     print(f"Heavy hitter threshold: Top {heavy_hitter_pct:.1f}% of papers ({heavy_hitter_threshold}+ citations, {heavy_hitter_count} papers)")
@@ -634,7 +819,7 @@ def print_analysis(papers: List[Dict], stats_by_score: Dict, year_stats: Dict, m
     print(f"{'Score':<8} {'Papers':<10} {'Mean':<10} {'Median':<10} {'Mean':<10} {'Median':<10} {'HH':<8} {'HH Prob':<10}")
     print(f"{'':8} {'':10} {'Cites':<10} {'Cites':<10} {'Infl':<10} {'Infl':<10} {'Count':<8} {'(%)':<10}")
     print("-" * 80)
-    
+
     for score in sorted(stats_by_score.keys()):
         stats = stats_by_score[score]
         # Display score with "+" if it's the max bin
@@ -643,52 +828,82 @@ def print_analysis(papers: List[Dict], stats_by_score: Dict, year_stats: Dict, m
               f"{stats['median_citations']:<10.1f} {stats['mean_influential']:<10.2f} "
               f"{stats['median_influential']:<10.1f} {stats['heavy_hitters']:<8} "
               f"{stats['heavy_hitter_probability']:<10.2f}")
-    
+
+    # Normalized statistics table
+    # Calculate normalized heavy hitter threshold for display
+    all_normalized_citations = [p["normalizedCitations"] for p in papers]
+    all_normalized_sorted = sorted(all_normalized_citations, reverse=True)
+    normalized_heavy_hitter_threshold = all_normalized_sorted[heavy_hitter_count - 1]
+
+    print(f"\n{'NORMALIZED STATISTICS BY COLLABORATION SCORE':-^80}")
+    print(f"Normalization: by {author_normalization} authors")
+    print(
+        f"Heavy hitter threshold: Top {heavy_hitter_pct:.1f}% of papers ({normalized_heavy_hitter_threshold:.2f}+ normalized citations, {heavy_hitter_count} papers)"
+    )
+    print()
+    print(
+        f"{'Score':<8} {'Papers':<10} {'Mean':<12} {'Median':<12} {'Mean':<12} {'Median':<12} {'HH':<8} {'HH Prob':<10}"
+    )
+    print(
+        f"{'':8} {'':10} {'Norm Cites':<12} {'Norm Cites':<12} {'Norm Infl':<12} {'Norm Infl':<12} {'Count':<8} {'(%)':<10}"
+    )
+    print("-" * 80)
+
+    for score in sorted(stats_by_score.keys()):
+        stats = stats_by_score[score]
+        score_label = f"{score}+" if score == max_collab_score else str(score)
+        print(
+            f"{score_label:<8} {stats['count']:<10} {stats['mean_normalized_citations']:<12.2f} "
+            f"{stats['median_normalized_citations']:<12.2f} {stats['mean_normalized_influential']:<12.2f} "
+            f"{stats['median_normalized_influential']:<12.2f} {stats['normalized_heavy_hitters']:<8} "
+            f"{stats['normalized_heavy_hitter_probability']:<10.2f}"
+        )
+
     # Comparison: single-area vs multi-area
     print(f"\n{'SINGLE-AREA vs MULTI-AREA COMPARISON':-^80}")
-    
+
     single_area = [p for p in papers if p["collaboration_score"] == 1]
     multi_area = [p for p in papers if p["collaboration_score"] >= 2]
-    
+
     if single_area and multi_area:
         single_citations = [p["citationCount"] for p in single_area]
         multi_citations = [p["citationCount"] for p in multi_area]
         single_influential = [p["influentialCitationCount"] for p in single_area]
         multi_influential = [p["influentialCitationCount"] for p in multi_area]
-        
+
         print(f"\nSingle-area papers (score = 1):")
         print(f"  Count: {len(single_area)}")
         print(f"  Mean citations: {statistics.mean(single_citations):.2f}")
         print(f"  Median citations: {statistics.median(single_citations):.1f}")
         print(f"  Mean influential citations: {statistics.mean(single_influential):.2f}")
         print(f"  Median influential citations: {statistics.median(single_influential):.1f}")
-        
+
         print(f"\nMulti-area papers (score >= 2):")
         print(f"  Count: {len(multi_area)}")
         print(f"  Mean citations: {statistics.mean(multi_citations):.2f}")
         print(f"  Median citations: {statistics.median(multi_citations):.1f}")
         print(f"  Mean influential citations: {statistics.mean(multi_influential):.2f}")
         print(f"  Median influential citations: {statistics.median(multi_influential):.1f}")
-        
+
         diff_mean = statistics.mean(multi_citations) - statistics.mean(single_citations)
         diff_pct = (diff_mean / statistics.mean(single_citations)) * 100
         diff_influential = statistics.mean(multi_influential) - statistics.mean(single_influential)
         diff_influential_pct = (diff_influential / statistics.mean(single_influential)) * 100 if statistics.mean(single_influential) > 0 else 0
-        
+
         print(f"\nCitation Count Difference: {diff_mean:+.2f} citations ({diff_pct:+.1f}%)")
         print(f"Influential Citation Difference: {diff_influential:+.2f} citations ({diff_influential_pct:+.1f}%)")
-    
+
     # Correlation by year
     if year_stats:
         print(f"\n{'CORRELATION BY YEAR':-^80}")
         print(f"{'Year':<8} {'Papers':<10} {'Correlation':<14} {'Mean Score':<12} {'Mean Cites':<12}")
         print("-" * 80)
-        
+
         for year in sorted(year_stats.keys()):
             stats = year_stats[year]
             print(f"{year:<8} {stats['count']:<10} {stats['correlation']:<14.4f} "
                   f"{stats['mean_score']:<12.2f} {stats['mean_citations']:<12.2f}")
-    
+
     print("\n" + "="*80)
 
 
@@ -768,13 +983,20 @@ def create_bar_chart(stats_by_score: Dict, graph_file: str, max_collab_score: in
         # Get citation values for this score
         citation_values = [citation_metrics[metric][i] for metric in citation_metrics.keys()]
 
+        # Store original values for labels
+        original_values = citation_values.copy()
+
+        # Clip bar heights to max_y_val if specified
+        if max_y_val is not None:
+            citation_values = [min(v, max_y_val) for v in citation_values]
+
         # X positions for citation bars
         x_citation = x_positions[:n_citation_metrics] + i * bar_width
 
-        # Label with score, paper count, and percentage
+        # Label with score and percentage only
         score_label = f"{score}+" if score == max_collab_score else str(score)
         percentage = (paper_counts[score] / total_papers) * 100
-        label = f"{score_label} (n={paper_counts[score]}, {percentage:.0f}%)"
+        label = f"{score_label} ({percentage:.0f}%)"
 
         bars = ax1.bar(x_citation, citation_values, bar_width, label=label, color=colors[i])
 
@@ -787,36 +1009,46 @@ def create_bar_chart(stats_by_score: Dict, graph_file: str, max_collab_score: in
 
         # Add data labels on citation bars
         for bar_idx, bar in enumerate(bars):
-            height = bar.get_height()
+            # Use original (unclipped) value for the label text
+            original_height = original_values[bar_idx]
+            # Use clipped bar height for positioning
+            bar_height = bar.get_height()
+
             # If max_y_val is set, check if label would be too close to top
             if max_y_val is not None:
                 # Calculate approximate label height (as fraction of y-axis range)
-                # Assuming fontsize 20 is roughly 3% of the plot height
-                label_height_estimate = max_y_val * 0.04
+                # Fontsize 16 with condensed font is roughly 3-4% of the plot height
+                label_height_estimate = max_y_val * 0.05
 
                 # If bar height + label would exceed or be very close to max_y_val
-                if height + label_height_estimate >= max_y_val * 0.98:
-                    # Place label inside the bar, with more distance from top (8% margin)
-                    label_y = height - (max_y_val * 0.08)
+                # Use 0.92 threshold (92%) to be more conservative
+                if bar_height + label_height_estimate >= max_y_val * 0.92:
+                    # Stagger labels at different heights to prevent overlap
+                    # Use score index (i) to determine stagger offset
+                    # Each label is offset by 6% of max_y_val from the previous
+                    stagger_offset = (i % n_scores) * (max_y_val * 0.06)
+                    # Base position: 8% from top, then add stagger
+                    label_y = bar_height - (max_y_val * 0.08) - stagger_offset
                     va = 'top'
                     # Use black text for light bars, white for dark bars
                     color = 'black' if is_light_color else 'white'
                 else:
                     # Normal case: place label above bar
-                    label_y = height
+                    label_y = bar_height
                     va = 'bottom'
                     color = 'black'
             else:
                 # No max_y_val set: normal placement
-                label_y = height
+                label_y = bar_height
                 va = 'bottom'
                 color = 'black'
 
             # Use integer format for median citations (index 1), decimal for others
+            # Always show the original (unclipped) value in the label
             if bar_idx == 1:  # Median citations
-                label_text = f'{int(height)}'
+                label_text = f"{int(original_height)}"
             else:
-                label_text = f'{height:.1f}'
+                label_text = f"{original_height:.1f}"
 
             ax1.text(bar.get_x() + bar.get_width()/2., label_y,
                    label_text,
@@ -867,9 +1099,9 @@ def create_bar_chart(stats_by_score: Dict, graph_file: str, max_collab_score: in
     # Add author filter to title if specified
     if author_filters:
         author_desc = ", ".join(author_filters)
-        filter_desc = f"{venue_desc} by {author_desc}"
+        filter_desc = f"{venue_desc} by {author_desc} (n={total_papers:,})"
     else:
-        filter_desc = venue_desc
+        filter_desc = f"{venue_desc} (n={total_papers:,})"
 
     # Add vertical separator line between citation metrics and heavy hitter
     # Position it exactly in the middle between the rightmost citation bar and leftmost heavy hitter bar
@@ -962,21 +1194,21 @@ def write_detailed_output(papers: List[Dict], output_file: str):
 def main():
     """Main function."""
     args = parse_arguments()
-    
+
     # Check that only one venue filter type is specified
     venue_filter_count = sum([
         args.metaareas is not None,
         args.areas is not None,
         args.conference_filters is not None
     ])
-    
+
     if venue_filter_count > 1:
         print("Error: Only one of --only-metaareas, --only-areas, or --only-conferences can be specified at a time.")
         sys.exit(1)
-    
+
     # Validate filter arguments
     validate_filters(args.metaareas, args.areas, args.conference_filters)
-    
+
     print(f"Collaboration level: {args.collaboration_level}")
     if args.conference_filters:
         print(f"Conference filter(s): {', '.join(args.conference_filters)}")
@@ -984,35 +1216,57 @@ def main():
         print(f"Area filter(s): {', '.join(args.areas)}")
     elif args.metaareas:
         print(f"Metaarea filter(s): {', '.join(args.metaareas)}")
-    
+
     if args.author_filters:
         print(f"Author filter(s): {', '.join(args.author_filters)}")
-    
+
     print(f"Max collaboration score (binning threshold): {args.max_collaboration_score}")
-    
+
     # Load data (will recompute collaboration scores at the specified level)
-    papers, total_papers = load_data(args.citations, args.papers_file, args.min_citations, args.collaboration_level, args.metaareas, args.areas, args.conference_filters, args.author_filters, args.max_collaboration_score)
-    
+    papers, total_papers = load_data(
+        args.citations,
+        args.papers_file,
+        args.min_citations,
+        args.collaboration_level,
+        args.metaareas,
+        args.areas,
+        args.conference_filters,
+        args.author_filters,
+        args.max_collaboration_score,
+        args.from_year,
+        args.to_year,
+        args.author_normalization,
+    )
+
     if not papers:
         print("No papers with citation data found.")
         sys.exit(1)
-    
+
     # Analyze
     stats_by_score = analyze_by_score(papers, args.heavy_hitter)
     year_stats = analyze_by_year(papers)
-    
+
     # Print analysis
-    print_analysis(papers, stats_by_score, year_stats, args.min_citations, total_papers, args.max_collaboration_score, args.heavy_hitter)
-    
+    print_analysis(
+        papers,
+        stats_by_score,
+        year_stats,
+        args.min_citations,
+        total_papers,
+        args.max_collaboration_score,
+        args.heavy_hitter,
+        args.author_normalization,
+    )
+
     # Create bar chart visualization only if --graph is specified
     if args.graph:
         create_bar_chart(stats_by_score, args.graph, args.max_collaboration_score, 
                          args.metaareas, args.areas, args.conference_filters, args.author_filters, args.max_y_val, args.heavy_hitter)
-    
+
     # Write detailed output if requested
     if args.output:
         write_detailed_output(papers, args.output)
-    
+
     print("\nAnalysis complete!")
 
 
