@@ -297,10 +297,11 @@ def parse_arguments():
         help="Tick frequency for secondary y-axis in second plot (normalized probability) (default: None, automatic)",
     )
     parser.add_argument(
-        "--heavy-hitter",
+        "--home-run",
+        dest="home_run_pct",
         type=float,
         default=10.0,
-        help="Percentage threshold for heavy hitters (top X%% of papers by citation count) (default: 10.0)",
+        help="Percentage threshold for home runs (top X%% of papers by citation count) (default: 10.0)",
     )
     parser.add_argument(
         "--from-year",
@@ -660,26 +661,26 @@ def compute_baseline_by_author_count(
 def compute_expected_statistics(
     papers_in_group: List[Dict],
     baseline_data: Dict[int, Dict],
-    heavy_hitter_threshold: int,
+    home_run_threshold: int,
     num_bundles: int = 100,
     actual_median_citations: float = None,
     actual_mean_citations: float = None,
     actual_median_influential: float = None,
     actual_mean_influential: float = None,
-    actual_hh_probability: float = None,
+    actual_hr_probability: float = None,
 ) -> Dict:
     """Compute expected statistics using reference bundle sampling.
 
     Args:
         papers_in_group: Papers in the collaboration score group
         baseline_data: Citation values by author count from compute_baseline_by_author_count
-        heavy_hitter_threshold: Citation threshold for heavy hitters
+        home_run_threshold: Citation threshold for home runs
         num_bundles: Number of reference bundles to create
         actual_median_citations: Actual median citations for the group
         actual_mean_citations: Actual mean citations for the group
         actual_median_influential: Actual median influential citations for the group
         actual_mean_influential: Actual mean influential citations for the group
-        actual_hh_probability: Actual heavy hitter probability for the group
+        actual_hr_probability: Actual home run probability for the group
 
     Returns:
         Dictionary with expected values and variances for normalized statistics
@@ -740,23 +741,23 @@ def compute_expected_statistics(
         bundle_medians_influential = np.median(all_bundles_influential, axis=1)
         bundle_means_influential = np.mean(all_bundles_influential, axis=1)
 
-        # Heavy hitter probability for all bundles at once
-        hh_counts = np.sum(all_bundles_citations >= heavy_hitter_threshold, axis=1)
-        bundle_hh_probabilities = (hh_counts / total_papers) * 100
+        # Home run probability for all bundles at once
+        hr_counts = np.sum(all_bundles_citations >= home_run_threshold, axis=1)
+        bundle_hr_probabilities = (hr_counts / total_papers) * 100
     else:
         # No data available
         bundle_medians_citations = np.zeros(num_bundles)
         bundle_means_citations = np.zeros(num_bundles)
         bundle_medians_influential = np.zeros(num_bundles)
         bundle_means_influential = np.zeros(num_bundles)
-        bundle_hh_probabilities = np.zeros(num_bundles)
+        bundle_hr_probabilities = np.zeros(num_bundles)
 
     # Compute expected values (mean across bundles)
     expected_median_citations = float(np.mean(bundle_medians_citations))
     expected_mean_citations = float(np.mean(bundle_means_citations))
     expected_median_influential = float(np.mean(bundle_medians_influential))
     expected_mean_influential = float(np.mean(bundle_means_influential))
-    expected_hh_probability = float(np.mean(bundle_hh_probabilities))
+    expected_hr_probability = float(np.mean(bundle_hr_probabilities))
 
     # Compute normalized values for each bundle
     normalized_median_citations_per_bundle = (
@@ -779,9 +780,9 @@ def compute_expected_statistics(
         if actual_mean_influential is not None
         else np.zeros(num_bundles)
     )
-    normalized_hh_probability_per_bundle = (
-        actual_hh_probability - bundle_hh_probabilities
-        if actual_hh_probability is not None
+    normalized_hr_probability_per_bundle = (
+        actual_hr_probability - bundle_hr_probabilities
+        if actual_hr_probability is not None
         else np.zeros(num_bundles)
     )
 
@@ -791,7 +792,7 @@ def compute_expected_statistics(
         "expected_mean_citations": expected_mean_citations,
         "expected_median_influential": expected_median_influential,
         "expected_mean_influential": expected_mean_influential,
-        "expected_heavy_hitter_probability": expected_hh_probability,
+        "expected_home_run_probability": expected_hr_probability,
         "variance_median_citations": float(
             np.var(normalized_median_citations_per_bundle, ddof=1)
         ),
@@ -804,15 +805,15 @@ def compute_expected_statistics(
         "variance_mean_influential": float(
             np.var(normalized_mean_influential_per_bundle, ddof=1)
         ),
-        "variance_heavy_hitter_probability": float(
-            np.var(normalized_hh_probability_per_bundle, ddof=1)
+        "variance_home_run_probability": float(
+            np.var(normalized_hr_probability_per_bundle, ddof=1)
         ),
     }
 
 
 def analyze_by_score(
     papers: List[Dict],
-    heavy_hitter_pct: float = 10.0,
+    home_run_pct: float = 10.0,
     max_authors: int = 7,
     num_bundles: int = 100,
 ) -> Dict[int, Dict]:
@@ -820,7 +821,7 @@ def analyze_by_score(
 
     Args:
         papers: List of paper dictionaries
-        heavy_hitter_pct: Percentage threshold for heavy hitters (default: 10.0)
+        home_run_pct: Percentage threshold for home runs (default: 10.0)
         max_authors: Maximum author count for normalization bins
         num_bundles: Number of reference bundles for expected statistics
 
@@ -847,11 +848,11 @@ def analyze_by_score(
             paper["influentialCitationCount"]
         )
 
-    # Determine heavy hitter threshold (top X% by citation count)
+    # Determine home run threshold (top X% by citation count)
     all_citations = [p["citationCount"] for p in papers]
     all_citations_sorted = sorted(all_citations, reverse=True)
-    heavy_hitter_count = max(1, int(len(all_citations) * heavy_hitter_pct / 100))
-    heavy_hitter_threshold = all_citations_sorted[heavy_hitter_count - 1]
+    home_run_count = max(1, int(len(all_citations) * home_run_pct / 100))
+    home_run_threshold = all_citations_sorted[home_run_count - 1]
 
     # Compute statistics for each score
     stats_by_score = {}
@@ -866,12 +867,10 @@ def analyze_by_score(
         actual_median_influential = statistics.median(influential)
         actual_mean_influential = statistics.mean(influential)
 
-        # Count heavy hitters in this score group (raw citations)
-        heavy_hitters_in_group = sum(
-            1 for c in citations if c >= heavy_hitter_threshold
-        )
-        actual_hh_probability = (
-            (heavy_hitters_in_group / len(citations)) * 100 if len(citations) > 0 else 0
+        # Count home runs in this score group (raw citations)
+        home_runs_in_group = sum(1 for c in citations if c >= home_run_threshold)
+        actual_hr_probability = (
+            (home_runs_in_group / len(citations)) * 100 if len(citations) > 0 else 0
         )
 
         # Compute expected statistics using reference bundle sampling
@@ -879,13 +878,13 @@ def analyze_by_score(
         expected_stats = compute_expected_statistics(
             papers_in_group,
             baseline_data,
-            heavy_hitter_threshold,
+            home_run_threshold,
             num_bundles,
             actual_median_citations,
             actual_mean_citations,
             actual_median_influential,
             actual_mean_influential,
-            actual_hh_probability,
+            actual_hr_probability,
         )
 
         # Compute normalized values (actual - expected)
@@ -902,9 +901,9 @@ def analyze_by_score(
             actual_mean_influential - expected_stats["expected_mean_influential"]
         )
 
-        # Normalized heavy hitter probability
-        normalized_heavy_hitter_probability = (
-            actual_hh_probability - expected_stats["expected_heavy_hitter_probability"]
+        # Normalized home run probability
+        normalized_home_run_probability = (
+            actual_hr_probability - expected_stats["expected_home_run_probability"]
         )
 
         stats_by_score[score] = {
@@ -931,14 +930,14 @@ def analyze_by_score(
             ],
             "variance_mean_influential": expected_stats["variance_mean_influential"],
             "total_citations": sum(citations),
-            "heavy_hitters": heavy_hitters_in_group,
-            "heavy_hitter_probability": actual_hh_probability,
-            "expected_heavy_hitter_probability": expected_stats[
-                "expected_heavy_hitter_probability"
+            "home_runs": home_runs_in_group,
+            "home_run_probability": actual_hr_probability,
+            "expected_home_run_probability": expected_stats[
+                "expected_home_run_probability"
             ],
-            "normalized_heavy_hitter_probability": normalized_heavy_hitter_probability,
-            "variance_heavy_hitter_probability": expected_stats[
-                "variance_heavy_hitter_probability"
+            "normalized_home_run_probability": normalized_home_run_probability,
+            "variance_home_run_probability": expected_stats[
+                "variance_home_run_probability"
             ],
         }
 
@@ -982,7 +981,7 @@ def print_analysis(
     min_citations: int = 0,
     total_papers: int = None,
     max_collab_score: int = 3,
-    heavy_hitter_pct: float = 10.0,
+    home_run_pct: float = 10.0,
     author_normalization: str = "known",
     max_authors: int = 7,
 ):
@@ -995,7 +994,7 @@ def print_analysis(
         min_citations: Minimum citation threshold used
         total_papers: Total number of papers loaded
         max_collab_score: Maximum collaboration score for binning
-        heavy_hitter_pct: Percentage threshold for heavy hitters
+        home_run_pct: Percentage threshold for home runs
         author_normalization: Type of author normalization used ('known' or 'all')
         max_authors: Maximum author count for normalization bins
     """
@@ -1149,17 +1148,21 @@ def print_analysis(
         f"  Interpretation: {interpretation_norm_inf} {direction_norm_inf} correlation"
     )
 
-    # Calculate heavy hitter threshold for display
+    # Calculate home run threshold for display
     all_citations = [p["citationCount"] for p in papers]
     all_citations_sorted = sorted(all_citations, reverse=True)
-    heavy_hitter_count = max(1, int(len(all_citations) * heavy_hitter_pct / 100))
-    heavy_hitter_threshold = all_citations_sorted[heavy_hitter_count - 1]
+    home_run_count = max(1, int(len(all_citations) * home_run_pct / 100))
+    home_run_threshold = all_citations_sorted[home_run_count - 1]
 
     # Combined statistics table
     print(f"\n{'STATISTICS BY COLLABORATION SCORE':-^80}")
-    print(f"Heavy hitter threshold: Top {heavy_hitter_pct:.1f}% of papers ({heavy_hitter_threshold}+ citations, {heavy_hitter_count} papers)")
+    print(
+        f"Home run threshold: Top {home_run_pct:.1f}% of papers ({home_run_threshold}+ citations, {home_run_count} papers)"
+    )
     print()
-    print(f"{'Score':<8} {'Papers':<10} {'Mean':<10} {'Median':<10} {'Mean':<10} {'Median':<10} {'HH':<8} {'HH Prob':<10}")
+    print(
+        f"{'Score':<8} {'Papers':<10} {'Mean':<10} {'Median':<10} {'Mean':<10} {'Median':<10} {'HR':<8} {'HR Prob':<10}"
+    )
     print(f"{'':8} {'':10} {'Cites':<10} {'Cites':<10} {'Infl':<10} {'Infl':<10} {'Count':<8} {'(%)':<10}")
     print("-" * 80)
 
@@ -1167,10 +1170,12 @@ def print_analysis(
         stats = stats_by_score[score]
         # Display score with "+" if it's the max bin
         score_label = f"{score}+" if score == max_collab_score else str(score)
-        print(f"{score_label:<8} {stats['count']:<10} {stats['mean_citations']:<10.2f} "
-              f"{stats['median_citations']:<10.1f} {stats['mean_influential']:<10.2f} "
-              f"{stats['median_influential']:<10.1f} {stats['heavy_hitters']:<8} "
-              f"{stats['heavy_hitter_probability']:<10.2f}")
+        print(
+            f"{score_label:<8} {stats['count']:<10} {stats['mean_citations']:<10.2f} "
+            f"{stats['median_citations']:<10.1f} {stats['mean_influential']:<10.2f} "
+            f"{stats['median_influential']:<10.1f} {stats['home_runs']:<8} "
+            f"{stats['home_run_probability']:<10.2f}"
+        )
 
     print("DEBUG: About to print normalized statistics")
     # Normalized statistics table
@@ -1225,8 +1230,8 @@ def print_analysis(
             f"[{ci_lower:>+7.2f}, {ci_upper:>+7.2f}]"
         )
 
-    # Heavy hitter probability table
-    print(f"\nHEAVY HITTER PROBABILITY (%):")
+    # Home run probability table
+    print(f"\nHOME RUN PROBABILITY (%):")
     print(
         f"{'Score':<8} {'Papers':<10} {'Actual':<12} {'Expected':<15} {'Normalized':<18} {'95% CI':<20}"
     )
@@ -1234,15 +1239,15 @@ def print_analysis(
     for score in sorted(stats_by_score.keys()):
         stats = stats_by_score[score]
         score_label = f"{score}+" if score == max_collab_score else str(score)
-        std_hh = stats["variance_heavy_hitter_probability"] ** 0.5
-        std_norm = stats["variance_heavy_hitter_probability"] ** 0.5
-        normalized = stats["normalized_heavy_hitter_probability"]
+        std_hr = stats["variance_home_run_probability"] ** 0.5
+        std_norm = stats["variance_home_run_probability"] ** 0.5
+        normalized = stats["normalized_home_run_probability"]
         ci_lower = normalized - 1.96 * std_norm
         ci_upper = normalized + 1.96 * std_norm
         print(
             f"{score_label:<8} {stats['count']:<10} "
-            f"{stats['heavy_hitter_probability']:>8.2f}    "
-            f"{stats['expected_heavy_hitter_probability']:>8.2f} (±{std_hh:>4.2f})  "
+            f"{stats['home_run_probability']:>8.2f}    "
+            f"{stats['expected_home_run_probability']:>8.2f} (±{std_hr:>4.2f})  "
             f"{normalized:>+7.2f} (±{std_norm:>4.2f})   "
             f"[{ci_lower:>+7.2f}, {ci_upper:>+7.2f}]"
         )
@@ -1309,7 +1314,7 @@ def create_bar_chart(
     max_y3_val: float = None,
     min_y4_val: float = None,
     max_y4_val: float = None,
-    heavy_hitter_pct: float = 10.0,
+    home_run_pct: float = 10.0,
     y1_tick_freq: float = None,
     y2_tick_freq: float = None,
     y3_tick_freq: float = None,
@@ -1331,7 +1336,7 @@ def create_bar_chart(
         max_y3_val: Maximum primary y-axis value for second plot (None for auto-scale)
         min_y4_val: Minimum secondary y-axis value for second plot (None for auto-scale)
         max_y4_val: Maximum secondary y-axis value for second plot (None for auto-scale)
-        heavy_hitter_pct: Percentage threshold for heavy hitters
+        home_run_pct: Percentage threshold for home runs
         y1_tick_freq: Tick frequency for primary y-axis in first plot (None for automatic)
         y2_tick_freq: Tick frequency for secondary y-axis in first plot (None for automatic)
         y3_tick_freq: Tick frequency for primary y-axis in second plot (None for automatic)
@@ -1351,9 +1356,9 @@ def create_bar_chart(
     normalized_mean_citations = [
         stats_by_score[s]["normalized_mean_citations"] for s in scores
     ]
-    hh_probability = [stats_by_score[s]["heavy_hitter_probability"] for s in scores]
-    normalized_hh_probability = [
-        stats_by_score[s]["normalized_heavy_hitter_probability"] for s in scores
+    hr_probability = [stats_by_score[s]["home_run_probability"] for s in scores]
+    normalized_hr_probability = [
+        stats_by_score[s]["normalized_home_run_probability"] for s in scores
     ]
 
     # Extract 95% confidence intervals for error bars (only for normalized metrics)
@@ -1364,8 +1369,8 @@ def create_bar_chart(
     ci_normalized_mean = [
         1.96 * (stats_by_score[s]["variance_mean_citations"] ** 0.5) for s in scores
     ]
-    ci_normalized_hh = [
-        1.96 * (stats_by_score[s]["variance_heavy_hitter_probability"] ** 0.5)
+    ci_normalized_hr = [
+        1.96 * (stats_by_score[s]["variance_home_run_probability"] ** 0.5)
         for s in scores
     ]
 
@@ -1385,7 +1390,7 @@ def create_bar_chart(
     # Bar width and positions - group by metric, not by score
     bar_width = 0.15
     group_spacing = 0.15  # Reduced from 0.3 to bring bar groups closer together
-    n_metrics = 3  # median citations, mean citations, and heavy hitter probability
+    n_metrics = 3  # median citations, mean citations, and home run probability
 
     # Create score labels with percentages
     score_labels = []
@@ -1398,7 +1403,7 @@ def create_bar_chart(
     # Create secondary y-axis for left subplot
     ax1_secondary = ax1.twinx()
 
-    # X positions: group by metric (mean citations, median citations, then heavy hitter probability)
+    # X positions: group by metric (mean citations, median citations, then home run probability)
     metric_positions = np.arange(n_metrics) * (n_scores * bar_width + group_spacing)
 
     # Plot mean citations (first group)
@@ -1409,9 +1414,9 @@ def create_bar_chart(
     x_median = metric_positions[1] + np.arange(n_scores) * bar_width
     bars2 = ax1.bar(x_median, median_citations, bar_width, color=colors, alpha=0.8)
 
-    # Plot heavy hitter probability (third group)
-    x_hh = metric_positions[2] + np.arange(n_scores) * bar_width
-    bars3 = ax1_secondary.bar(x_hh, hh_probability, bar_width, color=colors, alpha=0.8)
+    # Plot home run probability (third group)
+    x_hr = metric_positions[2] + np.arange(n_scores) * bar_width
+    bars3 = ax1_secondary.bar(x_hr, hr_probability, bar_width, color=colors, alpha=0.8)
 
     # Data labels will be added after y-axis limits are set
 
@@ -1426,7 +1431,7 @@ def create_bar_chart(
     metric_labels = [
         "Mean\ncitations",
         "Median\ncitations",
-        "Heavy hitter\nprobability",
+        "Home run\nprobability",
     ]
     ax1.set_xticks(metric_positions + (n_scores - 1) * bar_width / 2)
     ax1.set_xticklabels(metric_labels)
@@ -1497,7 +1502,7 @@ def create_bar_chart(
             prev_label_y1 = None
 
     prev_label_y2 = None
-    for i, (bar, val) in enumerate(zip(bars3, hh_probability)):
+    for i, (bar, val) in enumerate(zip(bars3, hr_probability)):
         if val > y2_lim:
             # Stagger vertically if previous bar also had a label
             if prev_label_y2 is not None:
@@ -1554,14 +1559,14 @@ def create_bar_chart(
         alpha=0.7,
     )
 
-    # Plot normalized heavy hitter probability (third group) with error bars
+    # Plot normalized home run probability (third group) with error bars
     bars6 = ax2_secondary.bar(
-        x_hh, normalized_hh_probability, bar_width, color=colors, alpha=0.8
+        x_hr, normalized_hr_probability, bar_width, color=colors, alpha=0.8
     )
     ax2_secondary.errorbar(
-        x_hh,
-        normalized_hh_probability,
-        yerr=ci_normalized_hh,
+        x_hr,
+        normalized_hr_probability,
+        yerr=ci_normalized_hr,
         fmt="none",
         ecolor="black",
         capsize=4,
@@ -1620,8 +1625,8 @@ def create_bar_chart(
         ax2_secondary.set_ylim(-max_y4_val, max_y4_val)
     else:
         # Auto-scale
-        max_abs_hh = max(
-            abs(min(normalized_hh_probability)), abs(max(normalized_hh_probability))
+        max_abs_hr = max(
+            abs(min(normalized_hr_probability)), abs(max(normalized_hr_probability))
         )
 
         # Add some padding (20%)
@@ -1730,7 +1735,7 @@ def create_bar_chart(
 
     prev_label_y4_upper = None
     prev_label_y4_lower = None
-    for i, (bar, val) in enumerate(zip(bars6, normalized_hh_probability)):
+    for i, (bar, val) in enumerate(zip(bars6, normalized_hr_probability)):
         if val > y4_lim_upper:
             # Stagger vertically if previous bar also had a label
             if prev_label_y4_upper is not None:
@@ -1976,7 +1981,7 @@ def main():
 
     # Analyze
     stats_by_score = analyze_by_score(
-        papers, args.heavy_hitter, args.max_authors, args.num_reference_bundles
+        papers, args.home_run_pct, args.max_authors, args.num_reference_bundles
     )
     year_stats = analyze_by_year(papers)
 
@@ -1988,7 +1993,7 @@ def main():
         args.min_citations,
         total_papers,
         args.max_collaboration_score,
-        args.heavy_hitter,
+        args.home_run_pct,
         args.author_normalization,
         args.max_authors,
     )
@@ -2009,7 +2014,7 @@ def main():
             args.max_y3_val,
             args.min_y4_val,
             args.max_y4_val,
-            args.heavy_hitter,
+            args.home_run_pct,
             args.y1_tick_freq,
             args.y2_tick_freq,
             args.y3_tick_freq,

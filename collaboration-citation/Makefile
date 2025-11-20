@@ -41,6 +41,10 @@ INTERDISCIPLINARY_GRAPH = $(GRAPH_DIR)/interdisciplinary$(GRAPH_SUFFIX).png
 NETWORKS_GRAPH = $(GRAPH_DIR)/networks$(GRAPH_SUFFIX).png
 SE_GRAPH = $(GRAPH_DIR)/se$(GRAPH_SUFFIX).png
 ALL_AUTHORS_GRAPH = $(GRAPH_DIR)/all-authors$(GRAPH_SUFFIX).png
+SYSTEMS_AUTHORS_GRAPH = $(GRAPH_DIR)/systems-authors$(GRAPH_SUFFIX).png
+AI_AUTHORS_GRAPH = $(GRAPH_DIR)/ai-authors$(GRAPH_SUFFIX).png
+THEORY_AUTHORS_GRAPH = $(GRAPH_DIR)/theory-authors$(GRAPH_SUFFIX).png
+INTERDISCIPLINARY_AUTHORS_GRAPH = $(GRAPH_DIR)/interdisciplinary-authors$(GRAPH_SUFFIX).png
 ANALYSIS_HTML = analysis.html
 ANALYSIS_MD = analysis.md
 
@@ -55,7 +59,7 @@ MD_TO_HTML = md_to_html.py
 all: $(CITATIONS_CSV) $(PAPERS_CSV)
 
 # Generate all graphs
-all-graphs: $(ALL_GRAPH) $(SYSTEMS_GRAPH) $(AI_GRAPH) $(THEORY_GRAPH) $(INTERDISCIPLINARY_GRAPH) $(NETWORKS_GRAPH) $(SE_GRAPH) $(ALL_AUTHORS_GRAPH)
+all-graphs: $(ALL_GRAPH) $(SYSTEMS_GRAPH) $(AI_GRAPH) $(THEORY_GRAPH) $(INTERDISCIPLINARY_GRAPH) $(NETWORKS_GRAPH) $(SE_GRAPH) $(ALL_AUTHORS_GRAPH) $(SYSTEMS_AUTHORS_GRAPH) $(AI_AUTHORS_GRAPH) $(THEORY_AUTHORS_GRAPH) $(INTERDISCIPLINARY_AUTHORS_GRAPH)
 
 # Generate citations.csv using fetch_citations.py, papers.csv, and dblp.xml.gz
 # Run from parent directory so csrankings.py can find sigcse-research-articles.csv
@@ -173,6 +177,22 @@ $(ALL_AUTHORS_GRAPH): $(ANALYZE_AUTHOR_COUNT) $(CITATIONS_CSV) $(PAPERS_CSV) | $
 		--to-year $(TO_YEAR_GRAPHS) \
 		--max-authors 7 \
 		--graph $(ALL_AUTHORS_GRAPH) \
+		--max-y1-val $(MAX_Y1_VAL) \
+		--max-y2-val $(MAX_Y2_VAL) \
+		--y1-tick-freq $(Y1_TICK_FREQ) \
+		--y2-tick-freq $(Y2_TICK_FREQ)
+
+# Generate metaarea author graphs (systems-authors, ai-authors, theory-authors, interdisciplinary-authors)
+$(SYSTEMS_AUTHORS_GRAPH) $(AI_AUTHORS_GRAPH) $(THEORY_AUTHORS_GRAPH) $(INTERDISCIPLINARY_AUTHORS_GRAPH): $(ANALYZE_AUTHOR_COUNT) $(CITATIONS_CSV) $(PAPERS_CSV) | $(GRAPH_DIR)
+	@metaarea=$(shell echo $@ | sed 's|$(GRAPH_DIR)/||' | sed 's|-authors$(GRAPH_SUFFIX).png||'); \
+	python $(ANALYZE_AUTHOR_COUNT) \
+		--citations $(CITATIONS_CSV) \
+		--papers $(PAPERS_CSV) \
+		--from-year $(FROM_YEAR) \
+		--to-year $(TO_YEAR_GRAPHS) \
+		--max-authors 7 \
+		--graph $@ \
+		--only-metaareas $$metaarea \
 		--max-y1-val $(MAX_Y1_VAL) \
 		--max-y2-val $(MAX_Y2_VAL) \
 		--y1-tick-freq $(Y1_TICK_FREQ) \

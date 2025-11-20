@@ -168,10 +168,11 @@ def parse_arguments():
         help="Count 'known' (faculty authors only) or 'all' authors (default: all)",
     )
     parser.add_argument(
-        "--heavy-hitter",
+        "--home-run",
+        dest="home_run_pct",
         type=float,
         default=10.0,
-        help="Percentage threshold for heavy hitters (top X%% of papers by citation count) (default: 10.0)",
+        help="Percentage threshold for home runs (top X%% of papers by citation count) (default: 10.0)",
     )
     parser.add_argument(
         "--only-metaareas",
@@ -216,7 +217,7 @@ def parse_arguments():
         "--max-y2-val",
         type=float,
         default=20,
-        help="Maximum value for secondary y-axis (heavy hitter probability) (default: 20)",
+        help="Maximum value for secondary y-axis (home run probability) (default: 20)",
     )
     parser.add_argument(
         "--y1-tick-freq",
@@ -228,7 +229,7 @@ def parse_arguments():
         "--y2-tick-freq",
         type=float,
         default=None,
-        help="Tick frequency for secondary y-axis (heavy hitter probability) (default: None, automatic)",
+        help="Tick frequency for secondary y-axis (home run probability) (default: None, automatic)",
     )
     return parser.parse_args()
 
@@ -415,55 +416,57 @@ def compute_spearman_correlation(x: List[float], y: List[float]) -> float:
     """Compute Spearman rank correlation coefficient."""
     if len(x) != len(y) or len(x) < 2:
         return 0.0
-    
+
     def rank_data(data):
         """Assign ranks to data, handling ties with average ranks."""
         sorted_indices = sorted(range(len(data)), key=lambda i: data[i])
         ranks = [0] * len(data)
-        
+
         i = 0
         while i < len(sorted_indices):
             j = i
             while j < len(sorted_indices) - 1 and data[sorted_indices[j]] == data[sorted_indices[j + 1]]:
                 j += 1
-            
+
             avg_rank = (i + j) / 2 + 1
             for k in range(i, j + 1):
                 ranks[sorted_indices[k]] = avg_rank
-            
+
             i = j + 1
-        
+
         return ranks
-    
+
     ranks_x = rank_data(x)
     ranks_y = rank_data(y)
-    
+
     n = len(ranks_x)
     mean_x = statistics.mean(ranks_x)
     mean_y = statistics.mean(ranks_y)
-    
+
     numerator = sum((ranks_x[i] - mean_x) * (ranks_y[i] - mean_y) for i in range(n))
     denominator_x = sum((ranks_x[i] - mean_x) ** 2 for i in range(n))
     denominator_y = sum((ranks_y[i] - mean_y) ** 2 for i in range(n))
-    
+
     if denominator_x == 0 or denominator_y == 0:
         return 0.0
-    
+
     return numerator / (denominator_x * denominator_y) ** 0.5
 
 
-def analyze_by_author_count(papers: List[Dict], heavy_hitter_pct: float = 10.0) -> Dict[int, Dict]:
+def analyze_by_author_count(
+    papers: List[Dict], home_run_pct: float = 10.0
+) -> Dict[int, Dict]:
     """Group papers by author count and compute statistics.
-    
+
     Args:
         papers: List of paper dictionaries
-        heavy_hitter_pct: Percentage threshold for heavy hitters (default: 10.0)
-    
+        home_run_pct: Percentage threshold for home runs (default: 10.0)
+
     Returns:
         Dictionary mapping author counts to statistics
     """
     by_count = {}
-    
+
     for paper in papers:
         count = paper["author_count"]
         if count not in by_count:
@@ -472,27 +475,29 @@ def analyze_by_author_count(papers: List[Dict], heavy_hitter_pct: float = 10.0) 
                 "citations": [],
                 "influential_citations": [],
             }
-        
+
         by_count[count]["papers"].append(paper)
         by_count[count]["citations"].append(paper["citationCount"])
         by_count[count]["influential_citations"].append(paper["influentialCitationCount"])
-    
-    # Determine heavy hitter threshold (top X% by citation count)
+
+    # Determine home run threshold (top X% by citation count)
     all_citations = [p["citationCount"] for p in papers]
     all_citations_sorted = sorted(all_citations, reverse=True)
-    heavy_hitter_count = max(1, int(len(all_citations) * heavy_hitter_pct / 100))
-    heavy_hitter_threshold = all_citations_sorted[heavy_hitter_count - 1]
-    
+    home_run_count = max(1, int(len(all_citations) * home_run_pct / 100))
+    home_run_threshold = all_citations_sorted[home_run_count - 1]
+
     # Compute statistics for each author count
     stats_by_count = {}
     for count, data in by_count.items():
         citations = data["citations"]
         influential = data["influential_citations"]
-        
-        # Count heavy hitters in this author count group
-        heavy_hitters_in_group = sum(1 for c in citations if c >= heavy_hitter_threshold)
-        heavy_hitter_probability = (heavy_hitters_in_group / len(citations)) * 100 if len(citations) > 0 else 0
-        
+
+        # Count home runs in this author count group
+        home_runs_in_group = sum(1 for c in citations if c >= home_run_threshold)
+        home_run_probability = (
+            (home_runs_in_group / len(citations)) * 100 if len(citations) > 0 else 0
+        )
+
         stats_by_count[count] = {
             "count": len(citations),
             "mean_citations": statistics.mean(citations),
@@ -500,10 +505,10 @@ def analyze_by_author_count(papers: List[Dict], heavy_hitter_pct: float = 10.0) 
             "stdev_citations": statistics.stdev(citations) if len(citations) > 1 else 0,
             "mean_influential": statistics.mean(influential),
             "median_influential": statistics.median(influential),
-            "heavy_hitters": heavy_hitters_in_group,
-            "heavy_hitter_probability": heavy_hitter_probability,
+            "home_runs": home_runs_in_group,
+            "home_run_probability": home_run_probability,
         }
-    
+
     return stats_by_count
 
 
@@ -514,15 +519,15 @@ def print_analysis(
     total_papers: int = None,
     max_authors: int = 20,
     author_normalization: str = "all",
-    heavy_hitter_pct: float = 10.0,
+    home_run_pct: float = 10.0,
 ):
     """Print comprehensive analysis results."""
-    
+
     print("\n" + "="*80)
     print("AUTHOR COUNT vs CITATION COUNT ANALYSIS")
     print("="*80)
     print(f"Author count mode: {author_normalization} authors")
-    
+
     # Overall statistics
     if min_citations > 0:
         print(f"\nMinimum citation threshold: {min_citations}")
@@ -531,21 +536,21 @@ def print_analysis(
             print(f"Papers meeting threshold: {len(papers)} ({100*len(papers)/total_papers:.1f}%)")
     else:
         print(f"\nTotal papers analyzed: {len(papers)}")
-    
+
     print(f"Years covered: {min(p['year'] for p in papers)} - {max(p['year'] for p in papers)}")
-    
+
     # Overall correlation
     all_counts = [p["author_count"] for p in papers]
     all_citations = [p["citationCount"] for p in papers]
     all_influential = [p["influentialCitationCount"] for p in papers]
-    
+
     overall_correlation = compute_spearman_correlation(all_counts, all_citations)
     influential_correlation = compute_spearman_correlation(all_counts, all_influential)
-    
+
     print(f"\n{'OVERALL CORRELATION':-^80}")
     print(f"\nCitation Count:")
     print(f"  Spearman rank correlation coefficient: {overall_correlation:.4f}")
-    
+
     if abs(overall_correlation) < 0.1:
         interpretation = "negligible"
     elif abs(overall_correlation) < 0.3:
@@ -556,13 +561,13 @@ def print_analysis(
         interpretation = "strong"
     else:
         interpretation = "very strong"
-    
+
     direction = "positive" if overall_correlation > 0 else "negative"
     print(f"  Interpretation: {interpretation} {direction} correlation")
-    
+
     print(f"\nInfluential Citation Count:")
     print(f"  Spearman rank correlation coefficient: {influential_correlation:.4f}")
-    
+
     if abs(influential_correlation) < 0.1:
         interpretation_inf = "negligible"
     elif abs(influential_correlation) < 0.3:
@@ -573,32 +578,38 @@ def print_analysis(
         interpretation_inf = "strong"
     else:
         interpretation_inf = "very strong"
-    
+
     direction_inf = "positive" if influential_correlation > 0 else "negative"
     print(f"  Interpretation: {interpretation_inf} {direction_inf} correlation")
-    
-    # Calculate heavy hitter threshold for display
+
+    # Calculate home run threshold for display
     all_citations = [p["citationCount"] for p in papers]
     all_citations_sorted = sorted(all_citations, reverse=True)
-    heavy_hitter_count = max(1, int(len(all_citations) * heavy_hitter_pct / 100))
-    heavy_hitter_threshold = all_citations_sorted[heavy_hitter_count - 1]
-    
+    home_run_count = max(1, int(len(all_citations) * home_run_pct / 100))
+    home_run_threshold = all_citations_sorted[home_run_count - 1]
+
     # Statistics table
     print(f"\n{'STATISTICS BY AUTHOR COUNT':-^80}")
-    print(f"Heavy hitter threshold: Top {heavy_hitter_pct:.1f}% of papers ({heavy_hitter_threshold}+ citations, {heavy_hitter_count} papers)")
+    print(
+        f"Home run threshold: Top {home_run_pct:.1f}% of papers ({home_run_threshold}+ citations, {home_run_count} papers)"
+    )
     print()
-    print(f"{'Authors':<10} {'Papers':<10} {'Mean':<12} {'Median':<12} {'Mean':<12} {'Median':<12} {'HH':<8} {'HH Prob':<10}")
+    print(
+        f"{'Authors':<10} {'Papers':<10} {'Mean':<12} {'Median':<12} {'Mean':<12} {'Median':<12} {'HR':<8} {'HR Prob':<10}"
+    )
     print(f"{'':10} {'':10} {'Cites':<12} {'Cites':<12} {'Infl':<12} {'Infl':<12} {'Count':<8} {'(%)':<10}")
     print("-" * 80)
-    
+
     for count in sorted(stats_by_count.keys()):
         stats = stats_by_count[count]
         count_label = f"{count}+" if count == max_authors else str(count)
-        print(f"{count_label:<10} {stats['count']:<10} {stats['mean_citations']:<12.2f} "
-              f"{stats['median_citations']:<12.1f} {stats['mean_influential']:<12.2f} "
-              f"{stats['median_influential']:<12.1f} {stats['heavy_hitters']:<8} "
-              f"{stats['heavy_hitter_probability']:<10.2f}")
-    
+        print(
+            f"{count_label:<10} {stats['count']:<10} {stats['mean_citations']:<12.2f} "
+            f"{stats['median_citations']:<12.1f} {stats['mean_influential']:<12.2f} "
+            f"{stats['median_influential']:<12.1f} {stats['home_runs']:<8} "
+            f"{stats['home_run_probability']:<10.2f}"
+        )
+
     print("\n" + "="*80)
 
 
@@ -607,7 +618,7 @@ def create_visualization(
     graph_file: str,
     max_authors: int = 20,
     total_papers: int = None,
-    heavy_hitter_pct: float = 10.0,
+    home_run_pct: float = 10.0,
     max_y1_val: float = 75,
     max_y2_val: float = 20,
     y1_tick_freq: float = None,
@@ -619,7 +630,7 @@ def create_visualization(
     counts = sorted(stats_by_count.keys())
     median_citations = [stats_by_count[c]['median_citations'] for c in counts]
     mean_citations = [stats_by_count[c]["mean_citations"] for c in counts]
-    heavy_hitter_probs = [stats_by_count[c]['heavy_hitter_probability'] for c in counts]
+    home_run_probs = [stats_by_count[c]["home_run_probability"] for c in counts]
     paper_counts = [stats_by_count[c]['count'] for c in counts]
 
     # Calculate total papers for percentages
@@ -642,10 +653,10 @@ def create_visualization(
     regression_line_mean = np.poly1d(coefficients_mean)
     y_regression_mean = regression_line_mean(x_pos)
 
-    # Calculate linear regression for heavy hitter probability
-    coefficients_hh = np.polyfit(x_pos, heavy_hitter_probs, 1)
-    regression_line_hh = np.poly1d(coefficients_hh)
-    y_regression_hh = regression_line_hh(x_pos)
+    # Calculate linear regression for home run probability
+    coefficients_hr = np.polyfit(x_pos, home_run_probs, 1)
+    regression_line_hr = np.poly1d(coefficients_hr)
+    y_regression_hr = regression_line_hr(x_pos)
 
     # Primary y-axis: Median citations (line with markers)
     line1 = ax1.plot(x_pos, median_citations, marker='o', markersize=8, linewidth=2,
@@ -717,33 +728,40 @@ def create_visualization(
         verticalalignment="bottom",
     )
 
-    # Secondary y-axis: Heavy hitter probability (line with markers)
-    line2 = ax2.plot(x_pos, heavy_hitter_probs, marker='s', markersize=8, linewidth=2,
-                     label='Heavy hitter probability', 
-                     color='coral', alpha=0.8)
-
-    # Add linear regression line for heavy hitter probability
-    line_regression_hh = ax2.plot(
+    # Secondary y-axis: Home run probability (line with markers)
+    line2 = ax2.plot(
         x_pos,
-        y_regression_hh,
+        home_run_probs,
+        marker="s",
+        markersize=8,
+        linewidth=2,
+        label="Home run probability",
+        color="coral",
+        alpha=0.8,
+    )
+
+    # Add linear regression line for home run probability
+    line_regression_hr = ax2.plot(
+        x_pos,
+        y_regression_hr,
         linestyle="--",
         linewidth=2,
         color="red",
         alpha=0.6,
     )
 
-    # Add regression formula for heavy hitter as text annotation
-    slope_hh = coefficients_hh[0]
-    intercept_hh = coefficients_hh[1]
-    formula_text_hh = f"y = {slope_hh:.1f}x + {intercept_hh:.1f}"
+    # Add regression formula for home run as text annotation
+    slope_hr = coefficients_hr[0]
+    intercept_hr = coefficients_hr[1]
+    formula_text_hr = f"y = {slope_hr:.1f}x + {intercept_hr:.1f}"
 
-    # Position the text slightly below the heavy hitter regression line at x=4 (index 3)
-    x_pos_label_hh = 3
-    y_pos_label_hh = y_regression_hh[x_pos_label_hh] - 0.5
+    # Position the text slightly below the home run regression line at x=4 (index 3)
+    x_pos_label_hr = 3
+    y_pos_label_hr = y_regression_hr[x_pos_label_hr] - 0.5
     ax2.text(
-        x_pos_label_hh,
-        y_pos_label_hh,
-        formula_text_hh,
+        x_pos_label_hr,
+        y_pos_label_hr,
+        formula_text_hr,
         fontsize=18,
         color="red",
         verticalalignment="top",
@@ -813,11 +831,11 @@ def create_visualization(
         fontweight="normal",
     )
 
-    # Heavy hitter label at x=0 (author count 1), y=60
+    # Home run label at x=0 (author count 1), y=60
     ax1.text(
         0,
         60,
-        "Heavy hitter probability",
+        "Home run probability",
         fontsize=22,
         color="coral",
         verticalalignment="center",
@@ -833,7 +851,7 @@ def create_visualization(
 def main():
     """Main function."""
     args = parse_arguments()
-    
+
     # Check that only one venue filter type is specified
     venue_filter_count = sum([
         args.metaareas is not None,
@@ -847,7 +865,7 @@ def main():
 
     # Validate filter arguments
     validate_filters(args.metaareas, args.areas, args.conference_filters)
-    
+
     # Load data
     papers, total_papers = load_data(
         args.citations,
@@ -862,23 +880,39 @@ def main():
         args.conference_filters,
         args.author_filters,
     )
-    
+
     if not papers:
         print("No papers with citation data found.")
         sys.exit(1)
-    
+
     # Analyze
-    stats_by_count = analyze_by_author_count(papers, args.heavy_hitter)
-    
+    stats_by_count = analyze_by_author_count(papers, args.home_run_pct)
+
     # Print analysis
-    print_analysis(papers, stats_by_count, args.min_citations, total_papers, args.max_authors, args.author_normalization, args.heavy_hitter)
-    
+    print_analysis(
+        papers,
+        stats_by_count,
+        args.min_citations,
+        total_papers,
+        args.max_authors,
+        args.author_normalization,
+        args.home_run_pct,
+    )
+
     # Create visualization if requested
     if args.graph:
-        create_visualization(stats_by_count, args.graph, args.max_authors, total_papers, 
-                           args.heavy_hitter, args.max_y1_val, args.max_y2_val,
-                           args.y1_tick_freq, args.y2_tick_freq)
-    
+        create_visualization(
+            stats_by_count,
+            args.graph,
+            args.max_authors,
+            total_papers,
+            args.home_run_pct,
+            args.max_y1_val,
+            args.max_y2_val,
+            args.y1_tick_freq,
+            args.y2_tick_freq,
+        )
+
     print("\nAnalysis complete!")
 
 
