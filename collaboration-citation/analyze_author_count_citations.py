@@ -615,58 +615,167 @@ def create_visualization(
 ):
     """Create visualization of author count vs citations."""
     print(f"\nCreating visualization...")
-    
+
     counts = sorted(stats_by_count.keys())
     median_citations = [stats_by_count[c]['median_citations'] for c in counts]
+    mean_citations = [stats_by_count[c]["mean_citations"] for c in counts]
     heavy_hitter_probs = [stats_by_count[c]['heavy_hitter_probability'] for c in counts]
     paper_counts = [stats_by_count[c]['count'] for c in counts]
-    
+
     # Calculate total papers for percentages
     if total_papers is None:
         total_papers = sum(paper_counts)
-    
+
     # Create figure with primary and secondary y-axes
     fig, ax1 = plt.subplots(figsize=(12, 6))
     ax2 = ax1.twinx()
-    
+
     x_pos = np.arange(len(counts))
-    
+
+    # Calculate linear regression for median citations
+    coefficients_median = np.polyfit(x_pos, median_citations, 1)
+    regression_line_median = np.poly1d(coefficients_median)
+    y_regression_median = regression_line_median(x_pos)
+
+    # Calculate linear regression for mean citations
+    coefficients_mean = np.polyfit(x_pos, mean_citations, 1)
+    regression_line_mean = np.poly1d(coefficients_mean)
+    y_regression_mean = regression_line_mean(x_pos)
+
+    # Calculate linear regression for heavy hitter probability
+    coefficients_hh = np.polyfit(x_pos, heavy_hitter_probs, 1)
+    regression_line_hh = np.poly1d(coefficients_hh)
+    y_regression_hh = regression_line_hh(x_pos)
+
     # Primary y-axis: Median citations (line with markers)
     line1 = ax1.plot(x_pos, median_citations, marker='o', markersize=8, linewidth=2,
                      label='Median citations', color='steelblue', alpha=0.8)
-    
+
+    # Primary y-axis: Mean citations (line with markers)
+    line3 = ax1.plot(
+        x_pos,
+        mean_citations,
+        marker="^",
+        markersize=8,
+        linewidth=2,
+        label="Mean citations",
+        color="darkgreen",
+        alpha=0.8,
+    )
+
+    # Add linear regression line for median citations
+    line_regression_median = ax1.plot(
+        x_pos,
+        y_regression_median,
+        linestyle="--",
+        linewidth=2,
+        color="darkblue",
+        alpha=0.6,
+    )
+
+    # Add linear regression line for mean citations
+    line_regression_mean = ax1.plot(
+        x_pos,
+        y_regression_mean,
+        linestyle="--",
+        linewidth=2,
+        color="green",
+        alpha=0.6,
+    )
+
+    # Add regression formula for median as text annotation
+    slope_median = coefficients_median[0]
+    intercept_median = coefficients_median[1]
+    formula_text_median = f"y = {slope_median:.1f}x + {intercept_median:.1f}"
+
+    # Position the text slightly below the median regression line at x=3
+    x_pos_label = 3
+    y_pos_label_median = y_regression_median[x_pos_label] - 3
+    ax1.text(
+        x_pos_label,
+        y_pos_label_median,
+        formula_text_median,
+        fontsize=18,
+        color="darkblue",
+        verticalalignment="top",
+    )
+
+    # Add regression formula for mean as text annotation
+    slope_mean = coefficients_mean[0]
+    intercept_mean = coefficients_mean[1]
+    formula_text_mean = f"y = {slope_mean:.1f}x + {intercept_mean:.1f}"
+
+    # Position the text slightly above the mean data point at x=4 (index 3)
+    x_pos_label_mean = 3
+    y_pos_label_mean = mean_citations[x_pos_label_mean] + 3
+    ax1.text(
+        x_pos_label_mean,
+        y_pos_label_mean,
+        formula_text_mean,
+        fontsize=18,
+        color="green",
+        verticalalignment="bottom",
+    )
+
     # Secondary y-axis: Heavy hitter probability (line with markers)
     line2 = ax2.plot(x_pos, heavy_hitter_probs, marker='s', markersize=8, linewidth=2,
                      label='Heavy hitter probability', 
                      color='coral', alpha=0.8)
-    
+
+    # Add linear regression line for heavy hitter probability
+    line_regression_hh = ax2.plot(
+        x_pos,
+        y_regression_hh,
+        linestyle="--",
+        linewidth=2,
+        color="red",
+        alpha=0.6,
+    )
+
+    # Add regression formula for heavy hitter as text annotation
+    slope_hh = coefficients_hh[0]
+    intercept_hh = coefficients_hh[1]
+    formula_text_hh = f"y = {slope_hh:.1f}x + {intercept_hh:.1f}"
+
+    # Position the text slightly below the heavy hitter regression line at x=4 (index 3)
+    x_pos_label_hh = 3
+    y_pos_label_hh = y_regression_hh[x_pos_label_hh] - 0.5
+    ax2.text(
+        x_pos_label_hh,
+        y_pos_label_hh,
+        formula_text_hh,
+        fontsize=18,
+        color="red",
+        verticalalignment="top",
+    )
+
     # Set labels and title with increased label padding
     ax1.set_xlabel('Number of authors (% of papers)', fontsize=22, fontweight='bold', labelpad=15)
     ax1.set_ylabel('Citation count', fontsize=22, fontweight='bold', color='black', labelpad=15)
     ax2.set_ylabel('Probability (%)', fontsize=22, fontweight='bold', color='black', labelpad=15)
-    
+
     # Set title with total paper count
     ax1.set_title(f'All papers (n={total_papers:,})', fontsize=22, fontweight='bold')
-    
+
     # Customize x-axis labels to include author count and fraction
     x_labels = []
     for i, count in enumerate(counts):
         count_label = f"{count}+" if count == max_authors else str(count)
         percentage = (paper_counts[i] / total_papers) * 100
         x_labels.append(f"{count_label}\n({percentage:.1f}%)")
-    
+
     ax1.set_xticks(x_pos)
     ax1.set_xticklabels(x_labels, fontsize=22)
-    
+
     # Set tick labels to black
     ax1.tick_params(axis='y', labelcolor='black', labelsize=22)
     ax1.tick_params(axis='x', labelcolor='black', labelsize=22)
     ax2.tick_params(axis='y', labelcolor='black', labelsize=22)
-    
+
     # Set both y-axes to start at zero and set maximum values
     ax1.set_ylim(bottom=0, top=max_y1_val)
     ax2.set_ylim(bottom=0, top=max_y2_val)
-    
+
     # Set tick frequencies if specified
     if y1_tick_freq is not None:
         ax1.set_yticks(np.arange(0, max_y1_val + y1_tick_freq, y1_tick_freq))
@@ -676,15 +785,45 @@ def create_visualization(
         ax2.set_yticks(np.arange(0, max_y2_val + y2_tick_freq, y2_tick_freq))
         # Set minor ticks at half the major tick frequency
         ax2.set_yticks(np.arange(0, max_y2_val + y2_tick_freq / 2, y2_tick_freq / 2), minor=True)
-    
+
     # Add grid for readability - major and minor grids
     ax1.grid(axis='y', which='major', alpha=0.5, linestyle='--')
     ax1.grid(axis='y', which='minor', alpha=0.3, linestyle=':')
-    
-    # Add legends at the bottom
-    ax1.legend(loc='lower left', frameon=False, fontsize=22)
-    ax2.legend(loc='lower right', frameon=False, fontsize=22)
-    
+
+    # Add text labels at specific positions instead of legends
+    # Median label at x=0 (author count 1), y=15
+    ax1.text(
+        0,
+        15,
+        "Median citations",
+        fontsize=22,
+        color="steelblue",
+        verticalalignment="center",
+        fontweight="normal",
+    )
+
+    # Mean label at x=0 (author count 1), y=115
+    ax1.text(
+        0,
+        115,
+        "Mean citations",
+        fontsize=22,
+        color="darkgreen",
+        verticalalignment="center",
+        fontweight="normal",
+    )
+
+    # Heavy hitter label at x=0 (author count 1), y=60
+    ax1.text(
+        0,
+        60,
+        "Heavy hitter probability",
+        fontsize=22,
+        color="coral",
+        verticalalignment="center",
+        fontweight="normal",
+    )
+
     plt.tight_layout()
     plt.savefig(graph_file, dpi=300, bbox_inches='tight')
     print(f"Visualization saved to {graph_file}")

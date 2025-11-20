@@ -4,6 +4,24 @@
 FROM_YEAR ?= 2000
 TO_YEAR ?= 2025
 
+# Year range for graphs (can be different from data collection range)
+TO_YEAR_GRAPHS ?= 2020
+
+# Graph axis parameters
+# First plot (raw metrics)
+MAX_Y1_VAL ?= 150
+Y1_TICK_FREQ ?= $(shell echo "$(MAX_Y1_VAL) / 3" | bc)
+MAX_Y2_VAL ?= 15
+Y2_TICK_FREQ ?= $(shell echo "$(MAX_Y2_VAL) / 3" | bc)
+
+# Second plot (normalized metrics)
+MIN_Y3_VAL ?= -25
+MAX_Y3_VAL ?= 75
+Y3_TICK_FREQ ?= $(shell echo "$(MAX_Y3_VAL) / 3" | bc)
+MIN_Y4_VAL ?= -3
+MAX_Y4_VAL ?= 9
+Y4_TICK_FREQ ?= $(shell echo "$(MAX_Y4_VAL) / 3" | bc)
+
 # Input file
 DBLP_FILE = ../dblp.xml.gz
 
@@ -37,7 +55,7 @@ MD_TO_HTML = md_to_html.py
 all: $(CITATIONS_CSV) $(PAPERS_CSV)
 
 # Generate all graphs
-all-graphs: $(ALL_GRAPH) $(SYSTEMS_GRAPH) $(AI_GRAPH) $(THEORY_GRAPH) $(INTERDISCIPLINARY_GRAPH) $(NETWORKS_GRAPH) $(SE_GRAPH)
+all-graphs: $(ALL_GRAPH) $(SYSTEMS_GRAPH) $(AI_GRAPH) $(THEORY_GRAPH) $(INTERDISCIPLINARY_GRAPH) $(NETWORKS_GRAPH) $(SE_GRAPH) $(ALL_AUTHORS_GRAPH)
 
 # Generate citations.csv using fetch_citations.py, papers.csv, and dblp.xml.gz
 # Run from parent directory so csrankings.py can find sigcse-research-articles.csv
@@ -82,9 +100,18 @@ $(ALL_GRAPH): $(ANALYZE_COLLABORATION) $(CITATIONS_CSV) $(PAPERS_CSV) | $(GRAPH_
 		--citations $(CITATIONS_CSV) \
 		--papers $(PAPERS_CSV) \
 		--graph $(ALL_GRAPH) \
-		--max-y-val 100 \
+		--max-y1-val $(MAX_Y1_VAL) \
+		--max-y2-val $(MAX_Y2_VAL) \
+		--y1-tick-freq $(Y1_TICK_FREQ) \
+		--y2-tick-freq $(Y2_TICK_FREQ) \
+		--min-y3-val $(MIN_Y3_VAL) \
+		--max-y3-val $(MAX_Y3_VAL) \
+		--min-y4-val $(MIN_Y4_VAL) \
+		--max-y4-val $(MAX_Y4_VAL) \
+		--y3-tick-freq $(Y3_TICK_FREQ) \
+		--y4-tick-freq $(Y4_TICK_FREQ) \
 		--from-year $(FROM_YEAR) \
-		--to-year $(TO_YEAR)
+		--to-year $(TO_YEAR_GRAPHS)
 
 # Generate metaarea graphs (systems, ai, theory, interdisciplinary)
 $(GRAPH_DIR)/%$(GRAPH_SUFFIX).png: $(ANALYZE_COLLABORATION) $(CITATIONS_CSV) $(PAPERS_CSV) | $(GRAPH_DIR)
@@ -95,9 +122,18 @@ $(GRAPH_DIR)/%$(GRAPH_SUFFIX).png: $(ANALYZE_COLLABORATION) $(CITATIONS_CSV) $(P
 			--papers $(PAPERS_CSV) \
 			--graph $@ \
 			--only-metaareas $$metaarea \
-			--max-y-val 100 \
+			--max-y1-val $(MAX_Y1_VAL) \
+			--max-y2-val $(MAX_Y2_VAL) \
+			--y1-tick-freq $(Y1_TICK_FREQ) \
+			--y2-tick-freq $(Y2_TICK_FREQ) \
+			--min-y3-val $(MIN_Y3_VAL) \
+			--max-y3-val $(MAX_Y3_VAL) \
+			--min-y4-val $(MIN_Y4_VAL) \
+			--max-y4-val $(MAX_Y4_VAL) \
+			--y3-tick-freq $(Y3_TICK_FREQ) \
+			--y4-tick-freq $(Y4_TICK_FREQ) \
 			--from-year $(FROM_YEAR) \
-			--to-year $(TO_YEAR); \
+			--to-year $(TO_YEAR_GRAPHS); \
 	fi
 
 # Generate area-specific graphs (networks for comm, se for soft)
@@ -114,24 +150,33 @@ $(NETWORKS_GRAPH) $(SE_GRAPH): $(ANALYZE_COLLABORATION) $(CITATIONS_CSV) $(PAPER
 		--papers $(PAPERS_CSV) \
 		--graph $@ \
 		--only-areas $$area \
-		--max-y-val 100 \
+		--max-y1-val $(MAX_Y1_VAL) \
+		--max-y2-val $(MAX_Y2_VAL) \
+		--y1-tick-freq $(Y1_TICK_FREQ) \
+		--y2-tick-freq $(Y2_TICK_FREQ) \
+		--min-y3-val $(MIN_Y3_VAL) \
+		--max-y3-val $(MAX_Y3_VAL) \
+		--min-y4-val $(MIN_Y4_VAL) \
+		--max-y4-val $(MAX_Y4_VAL) \
+		--y3-tick-freq $(Y3_TICK_FREQ) \
+		--y4-tick-freq $(Y4_TICK_FREQ) \
 		$$extra_args \
 		--from-year $(FROM_YEAR) \
-		--to-year $(TO_YEAR)
+		--to-year $(TO_YEAR_GRAPHS)
 
 # Generate all-authors.png using analyze_author_count_citations.py
 $(ALL_AUTHORS_GRAPH): $(ANALYZE_AUTHOR_COUNT) $(CITATIONS_CSV) $(PAPERS_CSV) | $(GRAPH_DIR)
 	python $(ANALYZE_AUTHOR_COUNT) \
 		--citations $(CITATIONS_CSV) \
 		--papers $(PAPERS_CSV) \
-		--from-year 2000 \
-		--to-year 2020 \
+		--from-year $(FROM_YEAR) \
+		--to-year $(TO_YEAR_GRAPHS) \
 		--max-authors 7 \
 		--graph $(ALL_AUTHORS_GRAPH) \
-		--max-y2-val 15 \
-		--max-y1-val 75 \
-		--y1-tick-freq 25 \
-		--y2-tick-freq 5
+		--max-y1-val $(MAX_Y1_VAL) \
+		--max-y2-val $(MAX_Y2_VAL) \
+		--y1-tick-freq $(Y1_TICK_FREQ) \
+		--y2-tick-freq $(Y2_TICK_FREQ)
 
 # Create graphs directory
 $(GRAPH_DIR):

@@ -237,10 +237,64 @@ def parse_arguments():
         help="Output file for bar chart visualization (default: None, no graph generated)",
     )
     parser.add_argument(
-        "--max-y-val",
+        "--max-y1-val",
         type=float,
         default=None,
-        help="Maximum y-axis value for the graph (default: auto-scale)",
+        help="Maximum primary y-axis value for the first plot (default: auto-scale)",
+    )
+    parser.add_argument(
+        "--max-y2-val",
+        type=float,
+        default=None,
+        help="Maximum secondary y-axis value for the first plot (default: auto-scale)",
+    )
+    parser.add_argument(
+        "--y1-tick-freq",
+        type=float,
+        default=None,
+        help="Tick frequency for primary y-axis in first plot (citation count) (default: None, automatic)",
+    )
+    parser.add_argument(
+        "--y2-tick-freq",
+        type=float,
+        default=None,
+        help="Tick frequency for secondary y-axis in first plot (probability) (default: None, automatic)",
+    )
+    parser.add_argument(
+        "--min-y3-val",
+        type=float,
+        default=None,
+        help="Minimum primary y-axis value for the second plot (default: auto-scale)",
+    )
+    parser.add_argument(
+        "--max-y3-val",
+        type=float,
+        default=None,
+        help="Maximum primary y-axis value for the second plot (default: auto-scale)",
+    )
+    parser.add_argument(
+        "--min-y4-val",
+        type=float,
+        default=None,
+        help="Minimum secondary y-axis value for the second plot (default: auto-scale)",
+    )
+    parser.add_argument(
+        "--max-y4-val",
+        type=float,
+        default=None,
+        help="Maximum secondary y-axis value for the second plot (default: auto-scale)",
+    )
+    parser.add_argument(
+        "--y3-tick-freq",
+        type=float,
+        default=None,
+        help="Tick frequency for primary y-axis in second plot (normalized citation count) (default: None, automatic)",
+    )
+    parser.add_argument(
+        "--y4-tick-freq",
+        type=float,
+        default=None,
+        help="Tick frequency for secondary y-axis in second plot (normalized probability) (default: None, automatic)",
     )
     parser.add_argument(
         "--heavy-hitter",
@@ -264,8 +318,20 @@ def parse_arguments():
         "--author-normalization",
         type=str,
         choices=["known", "all"],
-        default="known",
-        help="Normalize citations by author count: 'known' (faculty authors only) or 'all' (all authors) (default: known)",
+        default="all",
+        help="Author count to use for normalization baseline: 'known' (faculty authors only) or 'all' (all authors) (default: all)",
+    )
+    parser.add_argument(
+        "--max-authors",
+        type=int,
+        default=7,
+        help="Maximum author count for normalization bins; papers with >= this many authors are grouped together (default: 7)",
+    )
+    parser.add_argument(
+        "--num-reference-bundles",
+        type=int,
+        default=100,
+        help="Number of random reference bundles to create for computing expected statistics (default: 100)",
     )
     return parser.parse_args()
 
@@ -311,6 +377,7 @@ def load_data(
     from_year: int = None,
     to_year: int = None,
     author_normalization: str = "known",
+    max_authors: int = 7,
 ) -> Tuple[List[Dict], int]:
     """Load papers with collaboration scores and citation counts.
 
@@ -326,7 +393,8 @@ def load_data(
         max_collab_score: Maximum collaboration score to display separately; scores >= this are binned together
         from_year: If specified, only include papers from this year onwards (inclusive)
         to_year: If specified, only include papers up to this year (inclusive)
-        author_normalization: Normalize citations by 'known' or 'all' authors
+        author_normalization: Use 'known' or 'all' authors for normalization baseline
+        max_authors: Maximum author count for normalization bins
 
     Returns:
         Tuple of (filtered papers, total papers loaded)
@@ -459,28 +527,24 @@ def load_data(
                         if to_year is not None and paper_year > to_year:
                             continue  # Skip papers after to_year
 
-                        # Get author counts for normalization
+                        # Get author counts
                         known_author_count = paper_data["known_author_count"]
                         total_author_count = paper_data["total_author_count"]
 
-                        # Determine normalization divisor
+                        # Determine which author count to use for normalization baseline
                         if author_normalization == "known":
-                            author_divisor = max(
-                                known_author_count, 1
-                            )  # Avoid division by zero
+                            author_count_for_norm = known_author_count
                         else:  # "all"
-                            author_divisor = max(
-                                total_author_count, 1
-                            )  # Avoid division by zero
+                            author_count_for_norm = total_author_count
 
-                        # Compute normalized citations
-                        normalized_citations = citation_count / author_divisor
+                        # Bin author count for normalization (e.g., 7+ authors)
+                        binned_author_count = min(author_count_for_norm, max_authors)
+
                         influential_count = (
                             int(row["influentialCitationCount"])
                             if row["influentialCitationCount"]
                             else 0
                         )
-                        normalized_influential = influential_count / author_divisor
 
                         all_papers.append(
                             {
@@ -489,10 +553,10 @@ def load_data(
                                 "year": paper_year,
                                 "citationCount": citation_count,
                                 "influentialCitationCount": influential_count,
-                                "normalizedCitations": normalized_citations,
-                                "normalizedInfluential": normalized_influential,
                                 "known_author_count": known_author_count,
                                 "total_author_count": total_author_count,
+                                "author_count_for_norm": author_count_for_norm,
+                                "binned_author_count": binned_author_count,
                                 "collaboration_score": binned_score,
                                 "collaboration_areas": areas_string,
                             }
@@ -522,57 +586,250 @@ def compute_correlation(x: List[float], y: List[float]) -> float:
     """Compute Spearman rank correlation coefficient."""
     if len(x) != len(y) or len(x) < 2:
         return 0.0
-    
+
     # Create ranks for x and y
     def rank_data(data):
         """Assign ranks to data, handling ties with average ranks."""
         sorted_indices = sorted(range(len(data)), key=lambda i: data[i])
         ranks = [0] * len(data)
-        
+
         i = 0
         while i < len(sorted_indices):
             j = i
             # Find all tied values
             while j < len(sorted_indices) - 1 and data[sorted_indices[j]] == data[sorted_indices[j + 1]]:
                 j += 1
-            
+
             # Assign average rank to all tied values
             avg_rank = (i + j) / 2 + 1  # +1 because ranks start at 1
             for k in range(i, j + 1):
                 ranks[sorted_indices[k]] = avg_rank
-            
+
             i = j + 1
-        
+
         return ranks
-    
+
     ranks_x = rank_data(x)
     ranks_y = rank_data(y)
-    
+
     # Compute Pearson correlation on ranks
     n = len(ranks_x)
     mean_x = statistics.mean(ranks_x)
     mean_y = statistics.mean(ranks_y)
-    
+
     numerator = sum((ranks_x[i] - mean_x) * (ranks_y[i] - mean_y) for i in range(n))
     denominator_x = sum((ranks_x[i] - mean_x) ** 2 for i in range(n))
     denominator_y = sum((ranks_y[i] - mean_y) ** 2 for i in range(n))
-    
+
     if denominator_x == 0 or denominator_y == 0:
         return 0.0
-    
+
     return numerator / (denominator_x * denominator_y) ** 0.5
 
 
-def analyze_by_score(papers: List[Dict], heavy_hitter_pct: float = 10.0) -> Dict[int, Dict]:
+def compute_baseline_by_author_count(
+    papers: List[Dict], max_authors: int
+) -> Dict[int, Dict]:
+    """Compute baseline citation statistics by author count.
+
+    Args:
+        papers: List of all papers in the filtered set P
+        max_authors: Maximum author count bin (papers with >= this many authors are grouped)
+
+    Returns:
+        Dictionary mapping binned author counts to citation statistics
+    """
+    by_author_count = {}
+
+    for paper in papers:
+        author_bin = paper["binned_author_count"]
+        if author_bin not in by_author_count:
+            by_author_count[author_bin] = {
+                "citations": [],
+                "influential_citations": [],
+            }
+
+        by_author_count[author_bin]["citations"].append(paper["citationCount"])
+        by_author_count[author_bin]["influential_citations"].append(
+            paper["influentialCitationCount"]
+        )
+
+    return by_author_count
+
+
+def compute_expected_statistics(
+    papers_in_group: List[Dict],
+    baseline_data: Dict[int, Dict],
+    heavy_hitter_threshold: int,
+    num_bundles: int = 100,
+    actual_median_citations: float = None,
+    actual_mean_citations: float = None,
+    actual_median_influential: float = None,
+    actual_mean_influential: float = None,
+    actual_hh_probability: float = None,
+) -> Dict:
+    """Compute expected statistics using reference bundle sampling.
+
+    Args:
+        papers_in_group: Papers in the collaboration score group
+        baseline_data: Citation values by author count from compute_baseline_by_author_count
+        heavy_hitter_threshold: Citation threshold for heavy hitters
+        num_bundles: Number of reference bundles to create
+        actual_median_citations: Actual median citations for the group
+        actual_mean_citations: Actual mean citations for the group
+        actual_median_influential: Actual median influential citations for the group
+        actual_mean_influential: Actual mean influential citations for the group
+        actual_hh_probability: Actual heavy hitter probability for the group
+
+    Returns:
+        Dictionary with expected values and variances for normalized statistics
+    """
+    import random
+
+    # Count papers by author bin in this group
+    author_count_distribution = {}
+    for paper in papers_in_group:
+        author_bin = paper["binned_author_count"]
+        author_count_distribution[author_bin] = (
+            author_count_distribution.get(author_bin, 0) + 1
+        )
+
+    # Pre-convert baseline data to numpy arrays for faster operations
+    baseline_arrays = {}
+    for author_bin in author_count_distribution.keys():
+        if author_bin in baseline_data:
+            baseline_arrays[author_bin] = {
+                "citations": np.array(baseline_data[author_bin]["citations"]),
+                "influential": np.array(
+                    baseline_data[author_bin]["influential_citations"]
+                ),
+            }
+
+    total_papers = len(papers_in_group)
+
+    # Generate ALL random samples at once for maximum speed
+    # This creates a 2D array where each row is a complete bundle
+    all_bundles_citations = []
+    all_bundles_influential = []
+
+    for author_bin, count in author_count_distribution.items():
+        if author_bin in baseline_arrays:
+            citations_arr = baseline_arrays[author_bin]["citations"]
+            influential_arr = baseline_arrays[author_bin]["influential"]
+
+            # Generate all random indices at once: shape (num_bundles, count)
+            all_indices = np.random.randint(
+                0, len(citations_arr), size=(num_bundles, count)
+            )
+
+            # Sample all bundles at once: shape (num_bundles, count)
+            sampled_citations = citations_arr[all_indices]
+            sampled_influential = influential_arr[all_indices]
+
+            all_bundles_citations.append(sampled_citations)
+            all_bundles_influential.append(sampled_influential)
+
+    # Concatenate all author bins for each bundle: shape (num_bundles, total_papers)
+    if all_bundles_citations:
+        all_bundles_citations = np.concatenate(all_bundles_citations, axis=1)
+        all_bundles_influential = np.concatenate(all_bundles_influential, axis=1)
+
+        # Compute statistics for all bundles at once using vectorized operations
+        bundle_medians_citations = np.median(all_bundles_citations, axis=1)
+        bundle_means_citations = np.mean(all_bundles_citations, axis=1)
+        bundle_medians_influential = np.median(all_bundles_influential, axis=1)
+        bundle_means_influential = np.mean(all_bundles_influential, axis=1)
+
+        # Heavy hitter probability for all bundles at once
+        hh_counts = np.sum(all_bundles_citations >= heavy_hitter_threshold, axis=1)
+        bundle_hh_probabilities = (hh_counts / total_papers) * 100
+    else:
+        # No data available
+        bundle_medians_citations = np.zeros(num_bundles)
+        bundle_means_citations = np.zeros(num_bundles)
+        bundle_medians_influential = np.zeros(num_bundles)
+        bundle_means_influential = np.zeros(num_bundles)
+        bundle_hh_probabilities = np.zeros(num_bundles)
+
+    # Compute expected values (mean across bundles)
+    expected_median_citations = float(np.mean(bundle_medians_citations))
+    expected_mean_citations = float(np.mean(bundle_means_citations))
+    expected_median_influential = float(np.mean(bundle_medians_influential))
+    expected_mean_influential = float(np.mean(bundle_means_influential))
+    expected_hh_probability = float(np.mean(bundle_hh_probabilities))
+
+    # Compute normalized values for each bundle
+    normalized_median_citations_per_bundle = (
+        actual_median_citations - bundle_medians_citations
+        if actual_median_citations is not None
+        else np.zeros(num_bundles)
+    )
+    normalized_mean_citations_per_bundle = (
+        actual_mean_citations - bundle_means_citations
+        if actual_mean_citations is not None
+        else np.zeros(num_bundles)
+    )
+    normalized_median_influential_per_bundle = (
+        actual_median_influential - bundle_medians_influential
+        if actual_median_influential is not None
+        else np.zeros(num_bundles)
+    )
+    normalized_mean_influential_per_bundle = (
+        actual_mean_influential - bundle_means_influential
+        if actual_mean_influential is not None
+        else np.zeros(num_bundles)
+    )
+    normalized_hh_probability_per_bundle = (
+        actual_hh_probability - bundle_hh_probabilities
+        if actual_hh_probability is not None
+        else np.zeros(num_bundles)
+    )
+
+    # Compute variance of normalized values across bundles
+    return {
+        "expected_median_citations": expected_median_citations,
+        "expected_mean_citations": expected_mean_citations,
+        "expected_median_influential": expected_median_influential,
+        "expected_mean_influential": expected_mean_influential,
+        "expected_heavy_hitter_probability": expected_hh_probability,
+        "variance_median_citations": float(
+            np.var(normalized_median_citations_per_bundle, ddof=1)
+        ),
+        "variance_mean_citations": float(
+            np.var(normalized_mean_citations_per_bundle, ddof=1)
+        ),
+        "variance_median_influential": float(
+            np.var(normalized_median_influential_per_bundle, ddof=1)
+        ),
+        "variance_mean_influential": float(
+            np.var(normalized_mean_influential_per_bundle, ddof=1)
+        ),
+        "variance_heavy_hitter_probability": float(
+            np.var(normalized_hh_probability_per_bundle, ddof=1)
+        ),
+    }
+
+
+def analyze_by_score(
+    papers: List[Dict],
+    heavy_hitter_pct: float = 10.0,
+    max_authors: int = 7,
+    num_bundles: int = 100,
+) -> Dict[int, Dict]:
     """Group papers by collaboration score and compute statistics.
-    
+
     Args:
         papers: List of paper dictionaries
         heavy_hitter_pct: Percentage threshold for heavy hitters (default: 10.0)
-    
+        max_authors: Maximum author count for normalization bins
+        num_bundles: Number of reference bundles for expected statistics
+
     Returns:
         Dictionary mapping collaboration scores to statistics
     """
+    # First, collect baseline citation data by author count across all papers
+    baseline_data = compute_baseline_by_author_count(papers, max_authors)
+
     by_score = {}
 
     for paper in papers:
@@ -582,15 +839,13 @@ def analyze_by_score(papers: List[Dict], heavy_hitter_pct: float = 10.0) -> Dict
                 "papers": [],
                 "citations": [],
                 "influential_citations": [],
-                "normalized_citations": [],
-                "normalized_influential": [],
             }
 
         by_score[score]["papers"].append(paper)
         by_score[score]["citations"].append(paper["citationCount"])
-        by_score[score]["influential_citations"].append(paper["influentialCitationCount"])
-        by_score[score]["normalized_citations"].append(paper["normalizedCitations"])
-        by_score[score]["normalized_influential"].append(paper["normalizedInfluential"])
+        by_score[score]["influential_citations"].append(
+            paper["influentialCitationCount"]
+        )
 
     # Determine heavy hitter threshold (top X% by citation count)
     all_citations = [p["citationCount"] for p in papers]
@@ -598,49 +853,93 @@ def analyze_by_score(papers: List[Dict], heavy_hitter_pct: float = 10.0) -> Dict
     heavy_hitter_count = max(1, int(len(all_citations) * heavy_hitter_pct / 100))
     heavy_hitter_threshold = all_citations_sorted[heavy_hitter_count - 1]
 
-    # Determine heavy hitter threshold for normalized citations
-    all_normalized_citations = [p["normalizedCitations"] for p in papers]
-    all_normalized_sorted = sorted(all_normalized_citations, reverse=True)
-    normalized_heavy_hitter_threshold = all_normalized_sorted[heavy_hitter_count - 1]
-
     # Compute statistics for each score
     stats_by_score = {}
     for score, data in by_score.items():
         citations = data["citations"]
         influential = data["influential_citations"]
-        normalized_cites = data["normalized_citations"]
-        normalized_infl = data["normalized_influential"]
+        papers_in_group = data["papers"]
+
+        # Compute actual statistics
+        actual_median_citations = statistics.median(citations)
+        actual_mean_citations = statistics.mean(citations)
+        actual_median_influential = statistics.median(influential)
+        actual_mean_influential = statistics.mean(influential)
 
         # Count heavy hitters in this score group (raw citations)
-        heavy_hitters_in_group = sum(1 for c in citations if c >= heavy_hitter_threshold)
-        heavy_hitter_probability = (heavy_hitters_in_group / len(citations)) * 100 if len(citations) > 0 else 0
-
-        # Count heavy hitters in this score group (normalized citations)
-        normalized_heavy_hitters_in_group = sum(
-            1 for c in normalized_cites if c >= normalized_heavy_hitter_threshold
+        heavy_hitters_in_group = sum(
+            1 for c in citations if c >= heavy_hitter_threshold
         )
+        actual_hh_probability = (
+            (heavy_hitters_in_group / len(citations)) * 100 if len(citations) > 0 else 0
+        )
+
+        # Compute expected statistics using reference bundle sampling
+        # Pass actual values so we can compute normalized values per bundle
+        expected_stats = compute_expected_statistics(
+            papers_in_group,
+            baseline_data,
+            heavy_hitter_threshold,
+            num_bundles,
+            actual_median_citations,
+            actual_mean_citations,
+            actual_median_influential,
+            actual_mean_influential,
+            actual_hh_probability,
+        )
+
+        # Compute normalized values (actual - expected)
+        normalized_median_citations = (
+            actual_median_citations - expected_stats["expected_median_citations"]
+        )
+        normalized_mean_citations = (
+            actual_mean_citations - expected_stats["expected_mean_citations"]
+        )
+        normalized_median_influential = (
+            actual_median_influential - expected_stats["expected_median_influential"]
+        )
+        normalized_mean_influential = (
+            actual_mean_influential - expected_stats["expected_mean_influential"]
+        )
+
+        # Normalized heavy hitter probability
         normalized_heavy_hitter_probability = (
-            (normalized_heavy_hitters_in_group / len(normalized_cites)) * 100
-            if len(normalized_cites) > 0
-            else 0
+            actual_hh_probability - expected_stats["expected_heavy_hitter_probability"]
         )
 
         stats_by_score[score] = {
             "count": len(citations),
-            "mean_citations": statistics.mean(citations),
-            "median_citations": statistics.median(citations),
+            "mean_citations": actual_mean_citations,
+            "median_citations": actual_median_citations,
             "stdev_citations": statistics.stdev(citations) if len(citations) > 1 else 0,
-            "mean_influential": statistics.mean(influential),
-            "median_influential": statistics.median(influential),
-            "mean_normalized_citations": statistics.mean(normalized_cites),
-            "median_normalized_citations": statistics.median(normalized_cites),
-            "mean_normalized_influential": statistics.mean(normalized_infl),
-            "median_normalized_influential": statistics.median(normalized_infl),
+            "mean_influential": actual_mean_influential,
+            "median_influential": actual_median_influential,
+            "expected_median_citations": expected_stats["expected_median_citations"],
+            "expected_mean_citations": expected_stats["expected_mean_citations"],
+            "expected_median_influential": expected_stats[
+                "expected_median_influential"
+            ],
+            "expected_mean_influential": expected_stats["expected_mean_influential"],
+            "normalized_median_citations": normalized_median_citations,
+            "normalized_mean_citations": normalized_mean_citations,
+            "normalized_median_influential": normalized_median_influential,
+            "normalized_mean_influential": normalized_mean_influential,
+            "variance_median_citations": expected_stats["variance_median_citations"],
+            "variance_mean_citations": expected_stats["variance_mean_citations"],
+            "variance_median_influential": expected_stats[
+                "variance_median_influential"
+            ],
+            "variance_mean_influential": expected_stats["variance_mean_influential"],
             "total_citations": sum(citations),
             "heavy_hitters": heavy_hitters_in_group,
-            "heavy_hitter_probability": heavy_hitter_probability,
-            "normalized_heavy_hitters": normalized_heavy_hitters_in_group,
+            "heavy_hitter_probability": actual_hh_probability,
+            "expected_heavy_hitter_probability": expected_stats[
+                "expected_heavy_hitter_probability"
+            ],
             "normalized_heavy_hitter_probability": normalized_heavy_hitter_probability,
+            "variance_heavy_hitter_probability": expected_stats[
+                "variance_heavy_hitter_probability"
+            ],
         }
 
     return stats_by_score
@@ -685,6 +984,7 @@ def print_analysis(
     max_collab_score: int = 3,
     heavy_hitter_pct: float = 10.0,
     author_normalization: str = "known",
+    max_authors: int = 7,
 ):
     """Print comprehensive analysis results.
 
@@ -697,6 +997,7 @@ def print_analysis(
         max_collab_score: Maximum collaboration score for binning
         heavy_hitter_pct: Percentage threshold for heavy hitters
         author_normalization: Type of author normalization used ('known' or 'all')
+        max_authors: Maximum author count for normalization bins
     """
 
     print("\n" + "="*80)
@@ -718,14 +1019,54 @@ def print_analysis(
     all_scores = [p["collaboration_score"] for p in papers]
     all_citations = [p["citationCount"] for p in papers]
     all_influential = [p["influentialCitationCount"] for p in papers]
-    all_normalized_citations = [p["normalizedCitations"] for p in papers]
-    all_normalized_influential = [p["normalizedInfluential"] for p in papers]
 
     overall_correlation = compute_correlation(all_scores, all_citations)
     influential_correlation = compute_correlation(all_scores, all_influential)
-    normalized_correlation = compute_correlation(all_scores, all_normalized_citations)
+
+    # For normalized correlation, we need to compute normalized values for each paper
+    # based on the stats_by_score which contains the expected values
+    normalized_citations_list = []
+    normalized_influential_list = []
+
+    # Create a mapping from collaboration score to expected medians
+    expected_by_score = {
+        score: {
+            "citations": stats["expected_median_citations"],
+            "influential": stats["expected_median_influential"],
+        }
+        for score, stats in stats_by_score.items()
+    }
+
+    # For correlation, compute per-paper normalized citations
+    # Use median of author bin as the expected value for each paper
+    baseline_data = compute_baseline_by_author_count(papers, max_authors)
+
+    # Pre-compute medians for each author bin (do this ONCE, not per paper!)
+    baseline_medians = {}
+    for author_bin, data in baseline_data.items():
+        baseline_medians[author_bin] = {
+            "citations": np.median(data["citations"]),
+            "influential": np.median(data["influential_citations"]),
+        }
+
+    # Now compute normalized values for each paper
+    for paper in papers:
+        author_bin = paper["binned_author_count"]
+        if author_bin in baseline_medians:
+            expected_citations = baseline_medians[author_bin]["citations"]
+            expected_influential = baseline_medians[author_bin]["influential"]
+        else:
+            expected_citations = 0
+            expected_influential = 0
+
+        normalized_citations_list.append(paper["citationCount"] - expected_citations)
+        normalized_influential_list.append(
+            paper["influentialCitationCount"] - expected_influential
+        )
+
+    normalized_correlation = compute_correlation(all_scores, normalized_citations_list)
     normalized_influential_correlation = compute_correlation(
-        all_scores, all_normalized_influential
+        all_scores, normalized_influential_list
     )
 
     print(f"\n{'OVERALL CORRELATION':-^80}")
@@ -764,7 +1105,9 @@ def print_analysis(
     direction_inf = "positive" if influential_correlation > 0 else "negative"
     print(f"  Interpretation: {interpretation_inf} {direction_inf} correlation")
 
-    print(f"\nNormalized Citation Count (by {author_normalization} authors):")
+    print(
+        f"\nNormalized Citation Count (controlling for {author_normalization} author count):"
+    )
     print(f"  Spearman rank correlation coefficient: {normalized_correlation:.4f}")
 
     if abs(normalized_correlation) < 0.1:
@@ -782,7 +1125,7 @@ def print_analysis(
     print(f"  Interpretation: {interpretation_norm} {direction_norm} correlation")
 
     print(
-        f"\nNormalized Influential Citation Count (by {author_normalization} authors):"
+        f"\nNormalized Influential Citation Count (controlling for {author_normalization} author count):"
     )
     print(
         f"  Spearman rank correlation coefficient: {normalized_influential_correlation:.4f}"
@@ -829,34 +1172,79 @@ def print_analysis(
               f"{stats['median_influential']:<10.1f} {stats['heavy_hitters']:<8} "
               f"{stats['heavy_hitter_probability']:<10.2f}")
 
+    print("DEBUG: About to print normalized statistics")
     # Normalized statistics table
-    # Calculate normalized heavy hitter threshold for display
-    all_normalized_citations = [p["normalizedCitations"] for p in papers]
-    all_normalized_sorted = sorted(all_normalized_citations, reverse=True)
-    normalized_heavy_hitter_threshold = all_normalized_sorted[heavy_hitter_count - 1]
-
+    # Normalized statistics table
     print(f"\n{'NORMALIZED STATISTICS BY COLLABORATION SCORE':-^80}")
-    print(f"Normalization: by {author_normalization} authors")
-    print(
-        f"Heavy hitter threshold: Top {heavy_hitter_pct:.1f}% of papers ({normalized_heavy_hitter_threshold:.2f}+ normalized citations, {heavy_hitter_count} papers)"
-    )
+    print(f"Normalization: controlling for {author_normalization} author count")
+    print(f"(Normalized value = Actual - Expected based on author count distribution)")
+    print(f"(±std shows standard deviation across reference bundles)")
     print()
-    print(
-        f"{'Score':<8} {'Papers':<10} {'Mean':<12} {'Median':<12} {'Mean':<12} {'Median':<12} {'HH':<8} {'HH Prob':<10}"
-    )
-    print(
-        f"{'':8} {'':10} {'Norm Cites':<12} {'Norm Cites':<12} {'Norm Infl':<12} {'Norm Infl':<12} {'Count':<8} {'(%)':<10}"
-    )
-    print("-" * 80)
 
+    # Median citations table
+    print("MEDIAN CITATIONS:")
+    print(
+        f"{'Score':<8} {'Papers':<10} {'Actual':<12} {'Expected':<15} {'Normalized':<18} {'95% CI':<20}"
+    )
+    print("-" * 95)
     for score in sorted(stats_by_score.keys()):
         stats = stats_by_score[score]
         score_label = f"{score}+" if score == max_collab_score else str(score)
+        std_median = stats["variance_median_citations"] ** 0.5
+        std_norm = stats["variance_median_citations"] ** 0.5
+        normalized = stats["normalized_median_citations"]
+        ci_lower = normalized - 1.96 * std_norm
+        ci_upper = normalized + 1.96 * std_norm
         print(
-            f"{score_label:<8} {stats['count']:<10} {stats['mean_normalized_citations']:<12.2f} "
-            f"{stats['median_normalized_citations']:<12.2f} {stats['mean_normalized_influential']:<12.2f} "
-            f"{stats['median_normalized_influential']:<12.2f} {stats['normalized_heavy_hitters']:<8} "
-            f"{stats['normalized_heavy_hitter_probability']:<10.2f}"
+            f"{score_label:<8} {stats['count']:<10} "
+            f"{stats['median_citations']:>8.1f}    "
+            f"{stats['expected_median_citations']:>8.2f} (±{std_median:>4.2f})  "
+            f"{normalized:>+7.2f} (±{std_norm:>4.2f})   "
+            f"[{ci_lower:>+7.2f}, {ci_upper:>+7.2f}]"
+        )
+
+    # Mean citations table
+    print(f"\nMEAN CITATIONS:")
+    print(
+        f"{'Score':<8} {'Papers':<10} {'Actual':<12} {'Expected':<15} {'Normalized':<18} {'95% CI':<20}"
+    )
+    print("-" * 95)
+    for score in sorted(stats_by_score.keys()):
+        stats = stats_by_score[score]
+        score_label = f"{score}+" if score == max_collab_score else str(score)
+        std_mean = stats["variance_mean_citations"] ** 0.5
+        std_norm = stats["variance_mean_citations"] ** 0.5
+        normalized = stats["normalized_mean_citations"]
+        ci_lower = normalized - 1.96 * std_norm
+        ci_upper = normalized + 1.96 * std_norm
+        print(
+            f"{score_label:<8} {stats['count']:<10} "
+            f"{stats['mean_citations']:>8.2f}    "
+            f"{stats['expected_mean_citations']:>8.2f} (±{std_mean:>4.2f})  "
+            f"{normalized:>+7.2f} (±{std_norm:>4.2f})   "
+            f"[{ci_lower:>+7.2f}, {ci_upper:>+7.2f}]"
+        )
+
+    # Heavy hitter probability table
+    print(f"\nHEAVY HITTER PROBABILITY (%):")
+    print(
+        f"{'Score':<8} {'Papers':<10} {'Actual':<12} {'Expected':<15} {'Normalized':<18} {'95% CI':<20}"
+    )
+    print("-" * 95)
+    for score in sorted(stats_by_score.keys()):
+        stats = stats_by_score[score]
+        score_label = f"{score}+" if score == max_collab_score else str(score)
+        std_hh = stats["variance_heavy_hitter_probability"] ** 0.5
+        std_norm = stats["variance_heavy_hitter_probability"] ** 0.5
+        normalized = stats["normalized_heavy_hitter_probability"]
+        ci_lower = normalized - 1.96 * std_norm
+        ci_upper = normalized + 1.96 * std_norm
+        print(
+            f"{score_label:<8} {stats['count']:<10} "
+            f"{stats['heavy_hitter_probability']:>8.2f}    "
+            f"{stats['expected_heavy_hitter_probability']:>8.2f} (±{std_hh:>4.2f})  "
+            f"{normalized:>+7.2f} (±{std_norm:>4.2f})   "
+            f"[{ci_lower:>+7.2f}, {ci_upper:>+7.2f}]"
         )
 
     # Comparison: single-area vs multi-area
@@ -907,12 +1295,28 @@ def print_analysis(
     print("\n" + "="*80)
 
 
-def create_bar_chart(stats_by_score: Dict, graph_file: str, max_collab_score: int = 3, 
-                     metaarea_filters: List[str] = None, area_filters: List[str] = None, 
-                     conference_filters: List[str] = None, author_filters: List[str] = None, 
-                     max_y_val: float = None, heavy_hitter_pct: float = 10.0):
-    """Create a bar chart visualization of the analysis.
-    
+def create_bar_chart(
+    stats_by_score: Dict,
+    graph_file: str,
+    max_collab_score: int = 3,
+    metaarea_filters: List[str] = None,
+    area_filters: List[str] = None,
+    conference_filters: List[str] = None,
+    author_filters: List[str] = None,
+    max_y1_val: float = None,
+    max_y2_val: float = None,
+    min_y3_val: float = None,
+    max_y3_val: float = None,
+    min_y4_val: float = None,
+    max_y4_val: float = None,
+    heavy_hitter_pct: float = 10.0,
+    y1_tick_freq: float = None,
+    y2_tick_freq: float = None,
+    y3_tick_freq: float = None,
+    y4_tick_freq: float = None,
+):
+    """Create a bar chart visualization of the analysis with two subplots.
+
     Args:
         stats_by_score: Statistics grouped by collaboration score
         graph_file: Output file path for the graph
@@ -921,157 +1325,500 @@ def create_bar_chart(stats_by_score: Dict, graph_file: str, max_collab_score: in
         area_filters: Area filters applied
         conference_filters: Conference filters applied
         author_filters: Author filters applied
-        max_y_val: Maximum y-axis value (None for auto-scale)
+        max_y1_val: Maximum primary y-axis value for first plot (None for auto-scale)
+        max_y2_val: Maximum secondary y-axis value for first plot (None for auto-scale)
+        min_y3_val: Minimum primary y-axis value for second plot (None for auto-scale)
+        max_y3_val: Maximum primary y-axis value for second plot (None for auto-scale)
+        min_y4_val: Minimum secondary y-axis value for second plot (None for auto-scale)
+        max_y4_val: Maximum secondary y-axis value for second plot (None for auto-scale)
         heavy_hitter_pct: Percentage threshold for heavy hitters
+        y1_tick_freq: Tick frequency for primary y-axis in first plot (None for automatic)
+        y2_tick_freq: Tick frequency for secondary y-axis in first plot (None for automatic)
+        y3_tick_freq: Tick frequency for primary y-axis in second plot (None for automatic)
+        y4_tick_freq: Tick frequency for secondary y-axis in second plot (None for automatic)
     """
     print(f"\nCreating bar chart visualization...")
 
     # Prepare data
     scores = sorted(stats_by_score.keys())
 
-    # Separate citation metrics from heavy hitter probability
-    citation_metrics = {
-        'Mean\ncitations': [stats_by_score[s]['mean_citations'] for s in scores],
-        'Median\ncitations': [stats_by_score[s]['median_citations'] for s in scores],
-        'Mean\ninfluential\ncitations': [stats_by_score[s]['mean_influential'] for s in scores],
-    }
+    # Extract metrics
+    median_citations = [stats_by_score[s]["median_citations"] for s in scores]
+    mean_citations = [stats_by_score[s]["mean_citations"] for s in scores]
+    normalized_median_citations = [
+        stats_by_score[s]["normalized_median_citations"] for s in scores
+    ]
+    normalized_mean_citations = [
+        stats_by_score[s]["normalized_mean_citations"] for s in scores
+    ]
+    hh_probability = [stats_by_score[s]["heavy_hitter_probability"] for s in scores]
+    normalized_hh_probability = [
+        stats_by_score[s]["normalized_heavy_hitter_probability"] for s in scores
+    ]
 
-    hh_metric = {
-        f'Heavy hitter\n(top {heavy_hitter_pct:.0f}%)\nprobability': [stats_by_score[s]['heavy_hitter_probability'] for s in scores],
-    }
-
-    # Combine all metrics for x-axis positioning
-    all_metrics = list(citation_metrics.keys()) + list(hh_metric.keys())
-    n_citation_metrics = len(citation_metrics)
+    # Extract 95% confidence intervals for error bars (only for normalized metrics)
+    # 95% CI = ±1.96 × standard deviation
+    ci_normalized_median = [
+        1.96 * (stats_by_score[s]["variance_median_citations"] ** 0.5) for s in scores
+    ]
+    ci_normalized_mean = [
+        1.96 * (stats_by_score[s]["variance_mean_citations"] ** 0.5) for s in scores
+    ]
+    ci_normalized_hh = [
+        1.96 * (stats_by_score[s]["variance_heavy_hitter_probability"] ** 0.5)
+        for s in scores
+    ]
 
     # Paper counts for legend
-    paper_counts = {s: stats_by_score[s]['count'] for s in scores}
-
-    # Set up the plot with narrower width
-    fig, ax1 = plt.subplots(figsize=(10, 6))
-
-    # Create secondary y-axis
-    ax2 = ax1.twinx()
-
-    # Number of metrics and scores
-    n_metrics = len(all_metrics)
-    n_scores = len(scores)
-
-    # Width of each bar and spacing (wider bars, reduced separator)
-    bar_width = 0.22
-    group_spacing = 0.08
-    separator_spacing = 0.15  # Reduced space before heavy hitter group
-    group_width = n_scores * bar_width + group_spacing
-
-    # X positions for each metric group (with extra space before heavy hitter)
-    x_positions = np.zeros(n_metrics)
-    for i in range(n_metrics):
-        if i < n_citation_metrics:
-            x_positions[i] = i * group_width
-        else:
-            # Add extra spacing before heavy hitter group
-            x_positions[i] = i * group_width + separator_spacing
-
-    # Colors for each score
-    colors = plt.cm.viridis(np.linspace(0.2, 0.9, n_scores))
-
-    # Calculate total papers for percentage
+    paper_counts = {s: stats_by_score[s]["count"] for s in scores}
     total_papers = sum(paper_counts.values())
 
-    # Plot bars for citation metrics (on primary y-axis)
-    for i, score in enumerate(scores):
-        # Get citation values for this score
-        citation_values = [citation_metrics[metric][i] for metric in citation_metrics.keys()]
+    # Colors for each score
+    n_scores = len(scores)
+    colors = plt.cm.viridis(np.linspace(0.2, 0.9, n_scores))
 
-        # Store original values for labels
-        original_values = citation_values.copy()
+    # Set up the figure with two subplots side by side
+    # Increase wspace to add more space between subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+    fig.subplots_adjust(wspace=0.5)  # Horizontal space between subplots
 
-        # Clip bar heights to max_y_val if specified
-        if max_y_val is not None:
-            citation_values = [min(v, max_y_val) for v in citation_values]
+    # Bar width and positions - group by metric, not by score
+    bar_width = 0.15
+    group_spacing = 0.15  # Reduced from 0.3 to bring bar groups closer together
+    n_metrics = 3  # median citations, mean citations, and heavy hitter probability
 
-        # X positions for citation bars
-        x_citation = x_positions[:n_citation_metrics] + i * bar_width
-
-        # Label with score and percentage only
+    # Create score labels with percentages
+    score_labels = []
+    for score in scores:
         score_label = f"{score}+" if score == max_collab_score else str(score)
         percentage = (paper_counts[score] / total_papers) * 100
-        label = f"{score_label} ({percentage:.0f}%)"
+        score_labels.append(f"{score_label} ({percentage:.0f}%)")
 
-        bars = ax1.bar(x_citation, citation_values, bar_width, label=label, color=colors[i])
+    # === LEFT SUBPLOT: Raw metrics ===
+    # Create secondary y-axis for left subplot
+    ax1_secondary = ax1.twinx()
 
-        # Determine if this bar color is light (for text color selection)
-        # Calculate luminance of the bar color
-        bar_color = colors[i]
-        r, g, b = bar_color[0], bar_color[1], bar_color[2]
-        luminance = 0.299 * r + 0.587 * g + 0.114 * b
-        is_light_color = luminance > 0.6  # Threshold for light colors
+    # X positions: group by metric (mean citations, median citations, then heavy hitter probability)
+    metric_positions = np.arange(n_metrics) * (n_scores * bar_width + group_spacing)
 
-        # Add data labels on citation bars
-        for bar_idx, bar in enumerate(bars):
-            # Use original (unclipped) value for the label text
-            original_height = original_values[bar_idx]
-            # Use clipped bar height for positioning
-            bar_height = bar.get_height()
+    # Plot mean citations (first group)
+    x_mean = metric_positions[0] + np.arange(n_scores) * bar_width
+    bars1 = ax1.bar(x_mean, mean_citations, bar_width, color=colors, alpha=0.8)
 
-            # If max_y_val is set, check if label would be too close to top
-            if max_y_val is not None:
-                # Calculate approximate label height (as fraction of y-axis range)
-                # Fontsize 16 with condensed font is roughly 3-4% of the plot height
-                label_height_estimate = max_y_val * 0.05
+    # Plot median citations (second group)
+    x_median = metric_positions[1] + np.arange(n_scores) * bar_width
+    bars2 = ax1.bar(x_median, median_citations, bar_width, color=colors, alpha=0.8)
 
-                # If bar height + label would exceed or be very close to max_y_val
-                # Use 0.92 threshold (92%) to be more conservative
-                if bar_height + label_height_estimate >= max_y_val * 0.92:
-                    # Stagger labels at different heights to prevent overlap
-                    # Use score index (i) to determine stagger offset
-                    # Each label is offset by 6% of max_y_val from the previous
-                    stagger_offset = (i % n_scores) * (max_y_val * 0.06)
-                    # Base position: 8% from top, then add stagger
-                    label_y = bar_height - (max_y_val * 0.08) - stagger_offset
-                    va = 'top'
-                    # Use black text for light bars, white for dark bars
-                    color = 'black' if is_light_color else 'white'
-                else:
-                    # Normal case: place label above bar
-                    label_y = bar_height
-                    va = 'bottom'
-                    color = 'black'
+    # Plot heavy hitter probability (third group)
+    x_hh = metric_positions[2] + np.arange(n_scores) * bar_width
+    bars3 = ax1_secondary.bar(x_hh, hh_probability, bar_width, color=colors, alpha=0.8)
+
+    # Data labels will be added after y-axis limits are set
+
+    # Customize left subplot
+    ax1.set_ylabel("Citation count", fontsize=22, fontweight="bold")
+    ax1_secondary.set_ylabel("Probability (%)", fontsize=22, fontweight="bold")
+    ax1.tick_params(axis="y", labelsize=22)
+    ax1_secondary.tick_params(axis="y", labelsize=22)
+    ax1.tick_params(axis="x", labelsize=22)
+
+    # Set x-axis labels at metric group centers
+    metric_labels = [
+        "Mean\ncitations",
+        "Median\ncitations",
+        "Heavy hitter\nprobability",
+    ]
+    ax1.set_xticks(metric_positions + (n_scores - 1) * bar_width / 2)
+    ax1.set_xticklabels(metric_labels)
+
+    # Apply y-axis limits and tick frequencies for first plot
+    if max_y1_val is not None:
+        ax1.set_ylim(0, max_y1_val)
+    if max_y2_val is not None:
+        ax1_secondary.set_ylim(0, max_y2_val)
+    if y1_tick_freq is not None:
+        ax1.yaxis.set_major_locator(plt.MultipleLocator(y1_tick_freq))
+    if y2_tick_freq is not None:
+        ax1_secondary.yaxis.set_major_locator(plt.MultipleLocator(y2_tick_freq))
+
+    # Add grid with minor gridlines
+    ax1.grid(axis="y", which="major", alpha=0.5, linestyle="--")
+    ax1.grid(axis="y", which="minor", alpha=0.35, linestyle=":")
+    ax1.minorticks_on()
+    ax1.set_axisbelow(True)
+
+    # Add data labels for left subplot - only for bars that exceed y-axis limits
+    y1_lim = ax1.get_ylim()[1]
+    y2_lim = ax1_secondary.get_ylim()[1]
+
+    # Track which bars have labels to stagger them
+    prev_label_y1 = None
+    for i, (bar, val) in enumerate(zip(bars1, mean_citations)):
+        if val > y1_lim:
+            # Stagger vertically if previous bar also had a label
+            if prev_label_y1 is not None:
+                y_pos = y1_lim * 0.90  # Lower position for alternating
+                prev_label_y1 = None
             else:
-                # No max_y_val set: normal placement
-                label_y = bar_height
-                va = 'bottom'
-                color = 'black'
+                y_pos = y1_lim * 0.95  # Higher position
+                prev_label_y1 = i
 
-            # Use integer format for median citations (index 1), decimal for others
-            # Always show the original (unclipped) value in the label
-            if bar_idx == 1:  # Median citations
-                label_text = f"{int(original_height)}"
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                y_pos,
+                f"{int(val)}",
+                ha="center",
+                va="top",
+                fontsize=18,
+            )
+        else:
+            prev_label_y1 = None
+
+    prev_label_y1 = None
+    for i, (bar, val) in enumerate(zip(bars2, median_citations)):
+        if val > y1_lim:
+            # Stagger vertically if previous bar also had a label
+            if prev_label_y1 is not None:
+                y_pos = y1_lim * 0.90
+                prev_label_y1 = None
             else:
-                label_text = f"{original_height:.1f}"
+                y_pos = y1_lim * 0.95
+                prev_label_y1 = i
 
-            ax1.text(bar.get_x() + bar.get_width()/2., label_y,
-                   label_text,
-                   ha='center', va=va, fontsize=16, color=color, 
-                   fontfamily='sans-serif', stretch='condensed')
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                y_pos,
+                f"{int(val)}",
+                ha="center",
+                va="top",
+                fontsize=18,
+            )
+        else:
+            prev_label_y1 = None
 
-    # Plot bars for heavy hitter probability (on secondary y-axis)
-    for i, score in enumerate(scores):
-        # Get heavy hitter probability for this score
-        hh_values = [hh_metric[metric][i] for metric in hh_metric.keys()]
+    prev_label_y2 = None
+    for i, (bar, val) in enumerate(zip(bars3, hh_probability)):
+        if val > y2_lim:
+            # Stagger vertically if previous bar also had a label
+            if prev_label_y2 is not None:
+                y_pos = y2_lim * 0.90
+                prev_label_y2 = None
+            else:
+                y_pos = y2_lim * 0.95
+                prev_label_y2 = i
 
-        # X positions for heavy hitter bars
-        x_hh = x_positions[n_citation_metrics:] + i * bar_width
+            ax1_secondary.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                y_pos,
+                f"{val:.1f}",
+                ha="center",
+                va="top",
+                fontsize=18,
+            )
+        else:
+            prev_label_y2 = None
 
-        bars_hh = ax2.bar(x_hh, hh_values, bar_width, color=colors[i])
+    # === RIGHT SUBPLOT: Normalized metrics ===
+    # Create secondary y-axis for right subplot
+    ax2_secondary = ax2.twinx()
 
-        # Add data labels on heavy hitter bars
-        for bar in bars_hh:
-            height = bar.get_height()
-            ax2.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{height:.1f}',
-                   ha='center', va='bottom', fontsize=16, color='black',
-                   fontfamily='sans-serif', stretch='condensed')
+    # Plot normalized mean citations (first group) with error bars
+    bars4 = ax2.bar(
+        x_mean, normalized_mean_citations, bar_width, color=colors, alpha=0.8
+    )
+    ax2.errorbar(
+        x_mean,
+        normalized_mean_citations,
+        yerr=ci_normalized_mean,
+        fmt="none",
+        ecolor="black",
+        capsize=4,
+        capthick=1.5,
+        linewidth=1.5,
+        alpha=0.7,
+    )
+
+    # Plot normalized median citations (second group) with error bars
+    bars5 = ax2.bar(
+        x_median, normalized_median_citations, bar_width, color=colors, alpha=0.8
+    )
+    ax2.errorbar(
+        x_median,
+        normalized_median_citations,
+        yerr=ci_normalized_median,
+        fmt="none",
+        ecolor="black",
+        capsize=4,
+        capthick=1.5,
+        linewidth=1.5,
+        alpha=0.7,
+    )
+
+    # Plot normalized heavy hitter probability (third group) with error bars
+    bars6 = ax2_secondary.bar(
+        x_hh, normalized_hh_probability, bar_width, color=colors, alpha=0.8
+    )
+    ax2_secondary.errorbar(
+        x_hh,
+        normalized_hh_probability,
+        yerr=ci_normalized_hh,
+        fmt="none",
+        ecolor="black",
+        capsize=4,
+        capthick=1.5,
+        linewidth=1.5,
+        alpha=0.7,
+    )
+
+    # Data labels will be added after y-axis limits are set
+
+    # Customize right subplot
+    ax2.set_ylabel("Excess citation count", fontsize=22, fontweight="bold")
+    ax2_secondary.set_ylabel("Excess probability (%)", fontsize=22, fontweight="bold")
+    ax2.tick_params(axis="y", labelsize=22)
+    ax2_secondary.tick_params(axis="y", labelsize=22)
+    ax2.tick_params(axis="x", labelsize=22)
+
+    ax2.set_xticks(metric_positions + (n_scores - 1) * bar_width / 2)
+    ax2.set_xticklabels(metric_labels)
+
+    # Add horizontal line at zero for normalized plot
+    ax2.axhline(y=0, color="black", linestyle="-", linewidth=0.8, alpha=0.5)
+    ax2_secondary.axhline(y=0, color="black", linestyle="-", linewidth=0.8, alpha=0.5)
+
+    # Apply y-axis limits and tick frequencies for second plot
+    if min_y3_val is not None and max_y3_val is not None:
+        # Use specified limits for primary axis
+        ax2.set_ylim(min_y3_val, max_y3_val)
+    elif max_y3_val is not None:
+        # Only max specified, use symmetric limits
+        ax2.set_ylim(-max_y3_val, max_y3_val)
+    else:
+        # Auto-scale: center zero on the y-axis for normalized plot
+        # Get the max absolute value for symmetric axes (consider both median and mean)
+        max_abs_citations = max(
+            abs(min(normalized_median_citations)),
+            abs(max(normalized_median_citations)),
+            abs(min(normalized_mean_citations)),
+            abs(max(normalized_mean_citations)),
+        )
+
+        # Add some padding (20%)
+        max_abs_citations *= 1.2
+
+        ax2.set_ylim(-max_abs_citations, max_abs_citations)
+
+    if min_y4_val is not None and max_y4_val is not None:
+        # Use specified limits for secondary axis
+        ax2_secondary.set_ylim(min_y4_val, max_y4_val)
+    elif max_y4_val is not None:
+        # Only max specified, use symmetric limits
+        ax2_secondary.set_ylim(-max_y4_val, max_y4_val)
+    else:
+        # Auto-scale
+        max_abs_hh = max(
+            abs(min(normalized_hh_probability)), abs(max(normalized_hh_probability))
+        )
+
+        # Add some padding (20%)
+        max_abs_hh *= 1.2
+
+        ax2_secondary.set_ylim(-max_abs_hh, max_abs_hh)
+
+    if y3_tick_freq is not None:
+        ax2.yaxis.set_major_locator(plt.MultipleLocator(y3_tick_freq))
+    if y4_tick_freq is not None:
+        ax2_secondary.yaxis.set_major_locator(plt.MultipleLocator(y4_tick_freq))
+
+    # Add grid with minor gridlines
+    ax2.grid(axis="y", which="major", alpha=0.5, linestyle="--")
+    ax2.grid(axis="y", which="minor", alpha=0.35, linestyle=":")
+    ax2.minorticks_on()
+    ax2.set_axisbelow(True)
+
+    # Add data labels for right subplot - only for bars that exceed y-axis limits
+    y3_lim_upper = ax2.get_ylim()[1]
+    y3_lim_lower = ax2.get_ylim()[0]
+    y4_lim_upper = ax2_secondary.get_ylim()[1]
+    y4_lim_lower = ax2_secondary.get_ylim()[0]
+
+    prev_label_y3_upper = None
+    prev_label_y3_lower = None
+    for i, (bar, val) in enumerate(zip(bars4, normalized_mean_citations)):
+        if val > y3_lim_upper:
+            # Stagger vertically if previous bar also had a label
+            if prev_label_y3_upper is not None:
+                y_pos = y3_lim_upper * 0.90
+                prev_label_y3_upper = None
+            else:
+                y_pos = y3_lim_upper * 0.95
+                prev_label_y3_upper = i
+
+            ax2.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                y_pos,
+                f"{val:+.1f}",
+                ha="center",
+                va="top",
+                fontsize=18,
+            )
+        elif val < y3_lim_lower:
+            # Stagger vertically if previous bar also had a label
+            if prev_label_y3_lower is not None:
+                y_pos = y3_lim_lower * 0.90
+                prev_label_y3_lower = None
+            else:
+                y_pos = y3_lim_lower * 0.95
+                prev_label_y3_lower = i
+
+            ax2.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                y_pos,
+                f"{val:+.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=18,
+            )
+        else:
+            prev_label_y3_upper = None
+            prev_label_y3_lower = None
+
+    prev_label_y3_upper = None
+    prev_label_y3_lower = None
+    for i, (bar, val) in enumerate(zip(bars5, normalized_median_citations)):
+        if val > y3_lim_upper:
+            # Stagger vertically if previous bar also had a label
+            if prev_label_y3_upper is not None:
+                y_pos = y3_lim_upper * 0.90
+                prev_label_y3_upper = None
+            else:
+                y_pos = y3_lim_upper * 0.95
+                prev_label_y3_upper = i
+
+            ax2.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                y_pos,
+                f"{val:+.1f}",
+                ha="center",
+                va="top",
+                fontsize=18,
+            )
+        elif val < y3_lim_lower:
+            # Stagger vertically if previous bar also had a label
+            if prev_label_y3_lower is not None:
+                y_pos = y3_lim_lower * 0.90
+                prev_label_y3_lower = None
+            else:
+                y_pos = y3_lim_lower * 0.95
+                prev_label_y3_lower = i
+
+            ax2.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                y_pos,
+                f"{val:+.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=18,
+            )
+        else:
+            prev_label_y3_upper = None
+            prev_label_y3_lower = None
+
+    prev_label_y4_upper = None
+    prev_label_y4_lower = None
+    for i, (bar, val) in enumerate(zip(bars6, normalized_hh_probability)):
+        if val > y4_lim_upper:
+            # Stagger vertically if previous bar also had a label
+            if prev_label_y4_upper is not None:
+                y_pos = y4_lim_upper * 0.90
+                prev_label_y4_upper = None
+            else:
+                y_pos = y4_lim_upper * 0.95
+                prev_label_y4_upper = i
+
+            ax2_secondary.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                y_pos,
+                f"{val:+.1f}",
+                ha="center",
+                va="top",
+                fontsize=18,
+            )
+        elif val < y4_lim_lower:
+            # Stagger vertically if previous bar also had a label
+            if prev_label_y4_lower is not None:
+                y_pos = y4_lim_lower * 0.90
+                prev_label_y4_lower = None
+            else:
+                y_pos = y4_lim_lower * 0.95
+                prev_label_y4_lower = i
+
+            ax2_secondary.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                y_pos,
+                f"{val:+.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=18,
+            )
+        else:
+            prev_label_y4_upper = None
+            prev_label_y4_lower = None
+
+    # Create custom legend with labels below color boxes
+    # Create custom legend with labels below color boxes
+    # Convert bar_width from data coordinates to axis coordinates
+    # Get the x-axis range to calculate the relative width
+    x_range = ax2.get_xlim()[1] - ax2.get_xlim()[0]
+    box_width_axis = bar_width / x_range  # Convert bar width to axis coordinates
+
+    # Position in axis coordinates (0-1 range)
+    legend_x_start = 0.20  # Start position (moved left)
+    legend_y = 0.85  # Positioned at top of plot
+    box_height = 0.04  # Height of color box
+    spacing = box_width_axis * 3.5  # Spacing to prevent overlap
+
+    # Calculate center position for the legend
+    total_width = (n_scores - 1) * spacing
+    legend_x_center = legend_x_start + total_width / 2
+
+    # Add title centered above the boxes
+    ax2.text(
+        legend_x_center,
+        legend_y + 0.06,
+        "Num areas",
+        transform=ax2.transAxes,
+        fontsize=22,
+        ha="center",
+        va="bottom",
+    )
+
+    # Add color boxes and labels
+    for i, (color, label) in enumerate(zip(colors, score_labels)):
+        x_pos = legend_x_start + i * spacing
+
+        # Add color box with same width as bars
+        box = plt.Rectangle(
+            (x_pos - box_width_axis / 2, legend_y),
+            box_width_axis,
+            box_height,
+            facecolor=color,
+            alpha=0.8,
+            transform=ax2.transAxes,
+            clip_on=False,
+        )
+        ax2.add_patch(box)
+
+        # Add label below box
+        ax2.text(
+            x_pos,
+            legend_y - 0.02,
+            label,
+            transform=ax2.transAxes,
+            fontsize=22,
+            ha="center",
+            va="top",
+        )
 
     # Metaarea friendly names
     METAAREA_NAMES = {
@@ -1090,7 +1837,6 @@ def create_bar_chart(stats_by_score: Dict, graph_file: str, max_collab_score: in
         friendly_names = [AREA_NAMES.get(a, a) for a in area_filters]
         venue_desc = ", ".join(friendly_names) + " papers"
     elif metaarea_filters:
-        # Use friendly names for metaareas
         friendly_names = [METAAREA_NAMES.get(m, m) for m in metaarea_filters]
         venue_desc = ", ".join(friendly_names) + " papers"
     else:
@@ -1103,56 +1849,11 @@ def create_bar_chart(stats_by_score: Dict, graph_file: str, max_collab_score: in
     else:
         filter_desc = f"{venue_desc} (n={total_papers:,})"
 
-    # Add vertical separator line between citation metrics and heavy hitter
-    # Position it exactly in the middle between the rightmost citation bar and leftmost heavy hitter bar
-    # NOTE: matplotlib bar() positions bars with x as the CENTER, not left edge
+    # Add overall title
+    fig.suptitle(filter_desc, fontsize=22, fontweight="bold", y=0.98)
 
-    # The rightmost citation bar: last metric group, last score
-    # Its center is at: x_positions[n_citation_metrics - 1] + (n_scores - 1) * bar_width
-    # Its right edge is at: center + bar_width / 2
-    last_citation_bar_center = x_positions[n_citation_metrics - 1] + (n_scores - 1) * bar_width
-    last_citation_bar_right = last_citation_bar_center + bar_width / 2
-
-    # The leftmost heavy hitter bar: first heavy hitter metric, first score (i=0)
-    # Its center is at: x_positions[n_citation_metrics] + 0 * bar_width
-    # Its left edge is at: center - bar_width / 2
-    first_hh_bar_center = x_positions[n_citation_metrics]
-    first_hh_bar_left = first_hh_bar_center - bar_width / 2
-
-    # Place line exactly in the middle of the gap
-    separator_x = (last_citation_bar_right + first_hh_bar_left) / 2
-
-    # Customize the plot with adjusted font sizes
-    ax1.set_ylabel('Citation count', fontsize=18, fontweight='bold')
-    ax2.set_ylabel('Probability (%)', fontsize=18, fontweight='bold')
-    ax1.set_title(filter_desc, fontsize=20, fontweight='bold')
-    ax1.set_xticks(x_positions + (n_scores - 1) * bar_width / 2)
-    ax1.set_xticklabels(all_metrics, rotation=0, ha='center', fontsize=16)
-    ax1.tick_params(axis='y', labelsize=18)
-    ax2.tick_params(axis='y', labelsize=18)
-
-    # Draw the separator line AFTER setting xticks to avoid coordinate system changes
-    ax1.axvline(x=separator_x, color='lightgray', linestyle='--', linewidth=1.5, alpha=0.6)
-    # Position legend to the left of the separator line
-    # Convert separator_x from data coordinates to axes coordinates
-    xlim = ax1.get_xlim()
-    legend_x = (separator_x - xlim[0]) / (xlim[1] - xlim[0]) - 0.01  # Very close to the left
-    ax1.legend(title='Num areas', loc='upper right', bbox_to_anchor=(legend_x, 1.0), 
-               frameon=False, fontsize=16, title_fontsize=16)
-    ax1.grid(axis='y', alpha=0.3, linestyle='--')
-
-    # Set y-axis maximum if specified
-    if max_y_val is not None:
-        ax1.set_ylim(top=max_y_val)
-
-    # Set secondary y-axis maximum to 25
-    ax2.set_ylim(top=25)
-
-    # Reduce margins on left and right
-    ax1.margins(x=0.02)
-
-    # Adjust layout to prevent label cutoff
-    plt.tight_layout()
+    # Adjust layout to prevent label cutoff, but preserve wspace
+    plt.tight_layout(rect=[0, 0, 1, 0.96], w_pad=4.0)
 
     # Create directory if it doesn't exist
     graph_dir = os.path.dirname(graph_file)
@@ -1236,6 +1937,7 @@ def main():
         args.from_year,
         args.to_year,
         args.author_normalization,
+        args.max_authors,
     )
 
     if not papers:
@@ -1243,7 +1945,9 @@ def main():
         sys.exit(1)
 
     # Analyze
-    stats_by_score = analyze_by_score(papers, args.heavy_hitter)
+    stats_by_score = analyze_by_score(
+        papers, args.heavy_hitter, args.max_authors, args.num_reference_bundles
+    )
     year_stats = analyze_by_year(papers)
 
     # Print analysis
@@ -1256,12 +1960,31 @@ def main():
         args.max_collaboration_score,
         args.heavy_hitter,
         args.author_normalization,
+        args.max_authors,
     )
 
     # Create bar chart visualization only if --graph is specified
     if args.graph:
-        create_bar_chart(stats_by_score, args.graph, args.max_collaboration_score, 
-                         args.metaareas, args.areas, args.conference_filters, args.author_filters, args.max_y_val, args.heavy_hitter)
+        create_bar_chart(
+            stats_by_score,
+            args.graph,
+            args.max_collaboration_score,
+            args.metaareas,
+            args.areas,
+            args.conference_filters,
+            args.author_filters,
+            args.max_y1_val,
+            args.max_y2_val,
+            args.min_y3_val,
+            args.max_y3_val,
+            args.min_y4_val,
+            args.max_y4_val,
+            args.heavy_hitter,
+            args.y1_tick_freq,
+            args.y2_tick_freq,
+            args.y3_tick_freq,
+            args.y4_tick_freq,
+        )
 
     # Write detailed output if requested
     if args.output:
