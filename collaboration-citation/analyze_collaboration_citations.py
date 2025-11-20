@@ -1573,8 +1573,12 @@ def create_bar_chart(
     # Data labels will be added after y-axis limits are set
 
     # Customize right subplot
-    ax2.set_ylabel("Excess citation count", fontsize=22, fontweight="bold")
-    ax2_secondary.set_ylabel("Excess probability (%)", fontsize=22, fontweight="bold")
+    ax2.set_ylabel(
+        "Excess citation count\n(actual - reference)", fontsize=22, fontweight="bold"
+    )
+    ax2_secondary.set_ylabel(
+        "Excess probability (%)\n(actual - reference)", fontsize=22, fontweight="bold"
+    )
     ax2.tick_params(axis="y", labelsize=22)
     ax2_secondary.tick_params(axis="y", labelsize=22)
     ax2.tick_params(axis="x", labelsize=22)
@@ -1765,59 +1769,85 @@ def create_bar_chart(
             prev_label_y4_upper = None
             prev_label_y4_lower = None
 
-    # Create custom legend with labels below color boxes
-    # Create custom legend with labels below color boxes
-    # Convert bar_width from data coordinates to axis coordinates
-    # Get the x-axis range to calculate the relative width
-    x_range = ax2.get_xlim()[1] - ax2.get_xlim()[0]
-    box_width_axis = bar_width / x_range  # Convert bar width to axis coordinates
+    # Create custom legend at the bottom spanning both plots
+    # Use figure coordinates to position legend below both subplots
+    legend_y = -0.05  # Below the plots
 
-    # Position in axis coordinates (0-1 range)
-    legend_x_start = 0.20  # Start position (moved left)
-    legend_y = 0.85  # Positioned at top of plot
-    box_height = 0.04  # Height of color box
-    spacing = box_width_axis * 3.5  # Spacing to prevent overlap
+    # Calculate box width to match bar width
+    # Convert bar_width from data coordinates to figure coordinates
+    # Get the width of the plot area in figure coordinates
+    ax1_bbox = ax1.get_position()
+    plot_width_fig = ax1_bbox.width
+    x_range = ax1.get_xlim()[1] - ax1.get_xlim()[0]
+    box_width_fig = (bar_width / x_range) * plot_width_fig
 
-    # Calculate center position for the legend
-    total_width = (n_scores - 1) * spacing
-    legend_x_center = legend_x_start + total_width / 2
+    box_height_fig = 0.03  # Box height in figure coordinates
 
-    # Add title centered above the boxes
-    ax2.text(
-        legend_x_center,
-        legend_y + 0.06,
-        "Num areas",
-        transform=ax2.transAxes,
+    # Calculate total width needed for legend
+    # Estimate: title + n_scores * (box + label + spacing)
+    title_width = 0.25  # Approximate width for "Num areas (% of papers)"
+    item_width = 0.15  # Approximate width per legend item (box + label)
+    total_legend_width = title_width + n_scores * item_width
+
+    # Center the legend
+    legend_center = 0.5
+    legend_left = legend_center - total_legend_width / 2 - 0.04  # Add padding
+    legend_right = legend_center + total_legend_width / 2 + 0.04
+
+    # Calculate spacing between items
+    spacing = (legend_right - legend_left - 0.08) / (n_scores + 1)  # -0.08 for padding
+
+    # Calculate legend box boundaries for the border
+    legend_bottom = legend_y - box_height_fig / 2 - 0.015
+    legend_top = legend_y + box_height_fig / 2 + 0.015
+
+    # Add border around the entire legend
+    legend_border = plt.Rectangle(
+        (legend_left, legend_bottom),
+        legend_right - legend_left,
+        legend_top - legend_bottom,
+        facecolor="none",
+        edgecolor="black",
+        linewidth=1.5,
+        transform=fig.transFigure,
+        clip_on=False,
+    )
+    fig.add_artist(legend_border)
+
+    # Add title on the left
+    fig.text(
+        legend_left + 0.04 + spacing * 0.6,
+        legend_y,
+        "Num areas (% of papers)",
         fontsize=22,
         ha="center",
-        va="bottom",
+        va="center",
     )
 
-    # Add color boxes and labels
+    # Add color boxes and labels in a single horizontal line
     for i, (color, label) in enumerate(zip(colors, score_labels)):
-        x_pos = legend_x_start + i * spacing
+        x_pos = legend_left + 0.04 + spacing * (i + 1.6)
 
-        # Add color box with same width as bars
+        # Add color box with width matching bar width
         box = plt.Rectangle(
-            (x_pos - box_width_axis / 2, legend_y),
-            box_width_axis,
-            box_height,
+            (x_pos - box_width_fig / 2, legend_y - box_height_fig / 2),
+            box_width_fig,
+            box_height_fig,
             facecolor=color,
             alpha=0.8,
-            transform=ax2.transAxes,
+            transform=fig.transFigure,
             clip_on=False,
         )
-        ax2.add_patch(box)
+        fig.add_artist(box)
 
-        # Add label below box
-        ax2.text(
-            x_pos,
-            legend_y - 0.02,
+        # Add label to the right of box
+        fig.text(
+            x_pos + box_width_fig / 2 + 0.01,
+            legend_y,
             label,
-            transform=ax2.transAxes,
             fontsize=22,
-            ha="center",
-            va="top",
+            ha="left",
+            va="center",
         )
 
     # Metaarea friendly names

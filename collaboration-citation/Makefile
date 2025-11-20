@@ -16,11 +16,11 @@ Y2_TICK_FREQ ?= $(shell echo "$(MAX_Y2_VAL) / 3" | bc)
 
 # Second plot (normalized metrics)
 MIN_Y3_VAL ?= -25
-MAX_Y3_VAL ?= 75
-Y3_TICK_FREQ ?= $(shell echo "$(MAX_Y3_VAL) / 3" | bc)
+MAX_Y3_VAL ?= 50
+Y3_TICK_FREQ ?= $(shell echo "$(MAX_Y3_VAL) / 2" | bc)
 MIN_Y4_VAL ?= -3
-MAX_Y4_VAL ?= 9
-Y4_TICK_FREQ ?= $(shell echo "$(MAX_Y4_VAL) / 3" | bc)
+MAX_Y4_VAL ?= 6
+Y4_TICK_FREQ ?= $(shell echo "$(MAX_Y4_VAL) / 2" | bc)
 
 # Input file
 DBLP_FILE = ../dblp.xml.gz
