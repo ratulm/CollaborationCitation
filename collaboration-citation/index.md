@@ -1,6 +1,6 @@
 # Collaboration and citations in computer science
 
-*Ratul Mahajan*
+<p style="text-align: center;"><strong><a href="https://ratul.org">Ratul Mahajan</a></strong></p>
 <p style="text-align: center;">November 21, 2025</p>
 
 In research circles, collaboration is assumed to be an unadulterated good, the more the better. Processes and [entire buildings](https://www.scientificamerican.com/blog/observations/a-revolution-in-the-creation-of-scientific-workplaces/) are designed with the explicit purpose of encouraging collaboration, especially collaboration with researchers with different expertise. As much as I love to work with other smart people, the accompanying coordination overhead and communication frustrations make me wonder if collaboration is worth it and if its value can be objectively shown. So, over the last weekend (OK, two), I decided to crunch some numbers for fun. I've wanted to do this for a long time, and since modern coding agents make it so easy to do these things, I ran out of excuses. Read on to find out when and how much collaboration pays off.  
@@ -60,7 +60,7 @@ Systems and other area groups have a different behavior and show a significant p
 
 ## Conclusions
 
-If you are an AI researcher, you might want to stop working with researchers outside your area. Others should collaborate more and collaborate often across areas.
+If you are an AI researcher, you might want to stop talking to researchers outside your area. Others should collaborate more and collaborate often across areas.
 
 ## Acknowledgements
 

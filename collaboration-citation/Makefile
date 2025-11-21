@@ -45,8 +45,8 @@ SYSTEMS_AUTHORS_GRAPH = $(GRAPH_DIR)/systems-authors$(GRAPH_SUFFIX).png
 AI_AUTHORS_GRAPH = $(GRAPH_DIR)/ai-authors$(GRAPH_SUFFIX).png
 THEORY_AUTHORS_GRAPH = $(GRAPH_DIR)/theory-authors$(GRAPH_SUFFIX).png
 INTERDISCIPLINARY_AUTHORS_GRAPH = $(GRAPH_DIR)/interdisciplinary-authors$(GRAPH_SUFFIX).png
-ANALYSIS_HTML = analysis.html
-ANALYSIS_MD = analysis.md
+ANALYSIS_HTML = index.html
+ANALYSIS_MD = index.md
 
 # Python scripts
 FETCH_CITATIONS = fetch_citations.py
@@ -207,12 +207,16 @@ clean:
 	rm -f $(CITATIONS_CSV) $(PAPERS_CSV)
 	rm -rf $(GRAPH_DIR)
 
-# Generate analysis.html from analysis.md
-$(ANALYSIS_HTML): $(ANALYSIS_MD) $(MD_TO_HTML)
+# Generate index.html from index.md
+$(ANALYSIS_HTML): $(ANALYSIS_MD) $(MD_TO_HTML) all-graphs
 	python $(MD_TO_HTML) $(ANALYSIS_MD) $(ANALYSIS_HTML)
 
 # Convenience target for generating the analysis HTML
 analysis: all-graphs $(ANALYSIS_HTML)
+
+# Create a deployable zip file with index.html and graphs folder
+citation-analysis.zip: $(ANALYSIS_HTML)
+	zip -r citation-analysis.zip $(ANALYSIS_HTML) $(GRAPH_DIR)
 
 # Phony targets
 .PHONY: all clean all-graphs analysis
